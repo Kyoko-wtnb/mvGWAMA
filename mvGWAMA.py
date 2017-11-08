@@ -1,5 +1,12 @@
 #!/usr/bin/python
 
+'''
+Multivariate genome-wide assocaition meta analysis
+
+8 Nov 2017
+Kyoko Watanabe (k.watanabe@vu.nl)
+'''
+
 import sys
 import os
 import pandas as pd
@@ -11,15 +18,27 @@ import math
 import time
 from tempfile import mkdtemp
 
+__version__ = '0.0.0'
+HEADMSS = "#####################################################\n"
+HEADMSS += "# Multivariate genome-wide association meta-analysis\n"
+HEADMSS += "# mvGWAMA.py\n"
+HEADMSS += "# Version {V}\n".format(V=__version__)
+HEADMSS += "# (c) 2017 Kyoko Watanabe\n"
+HEADMSS += "# MIT Licence\n"
+HEADMSS += "#####################################################\n"
+
 parser = argparse.ArgumentParser()
 parser.add_argument('-c', '--config', default=None, type=str, help="(Required) Config file of summary statistics.")
 parser.add_argument('-i', '--intercept', default=None, type=str, help="(Required) File name of the intercelpt matrix (lower triangle).")
 parser.add_argument('-o', '--out', default="multivariateGWAS", type=str, help="Output file name. 'multivariateGWAS' by default.")
 parser.add_argument('--twoside', default=False, action='store_true', help="Use this flag to convert P to Z by two sided.")
 parser.add_argument('-ch', '--chrom', default=None, type=int, help="To run for a specific chromosome.")
-
 #parser.add_argument('--no-weight', default=False, action='store_true', help="Use this flag to not weight by sample size.")
-tmpdir = os.path.join(mkdtemp())
+
+### global variable
+tmpdir = os.path.join(mkdtemp()) #path to temp for memmap files
+allele_idx = ['A', 'C', 'G', 'T']
+allele_map = {'A':0, 'C':1, 'G':2, 'T':3}
 
 ##### Return index of a1 which exist in a2 #####
 def ArrayIn(a1, a2):
@@ -51,21 +70,16 @@ def non_duplicated(a):
 
 ### read intercept matrix
 # input file should contain lower triangle (excluding diagonal)
-# replace negative intercept to zero
+# take absolute value (v 0.0.0)
+# C = [-1,1]
 def getIntercept(infile):
 	C = []
 	with open(infile, 'r') as inf:
 		for l in inf:
 			l = l.strip().split()
-			tmp = [float(x) if float(x)>0 else float(0) for x in l]
-			tmp = [float(x) if float(x)<1 else float(1) for x in tmp]
+			tmp = [abs(float(x)) if float(x)>=-1 and float(x)<=1 else float(1) for x in l]
 			C.append(tmp)
 	return C
-
-### get uniqID
-def get_uniqID(l):
-	str(l[0])+":"+str(l[1])+":"+"_".join(sorted([l[2], l[3]]))
-vfunc = np.vectorize(get_uniqID)
 
 ### match rsID
 def match_rsID(ids):
@@ -313,6 +327,9 @@ def computeZ(snps, nGWAS, twoside):
 
 def main(args):
 	start_time = time.time()
+
+	print HEADMSS
+
 	### check arguments
 	if args.config is None:
 		parser.print_help()
