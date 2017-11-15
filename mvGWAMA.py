@@ -17,6 +17,7 @@ import scipy.stats as st
 import math
 import time
 from tempfile import mkdtemp
+from joblib import Parallel, delayed
 
 __version__ = '0.0.0'
 HEADMSS = "#####################################################\n"
@@ -33,12 +34,16 @@ parser.add_argument('-i', '--intercept', default=None, type=str, help="(Required
 parser.add_argument('-o', '--out', default="multivariateGWAS", type=str, help="Output file name. 'multivariateGWAS' by default.")
 parser.add_argument('--twoside', default=False, action='store_true', help="Use this flag to convert P to Z by two sided.")
 parser.add_argument('-ch', '--chrom', default=None, type=int, help="To run for a specific chromosome.")
+parser.add_argument('-p', '--parallel', default=None, type=int, help="To parallelize process, provide the number of cores/thread.")
+
 #parser.add_argument('--no-weight', default=False, action='store_true', help="Use this flag to not weight by sample size.")
 
 ### global variable
 tmpdir = os.path.join(mkdtemp()) #path to temp for memmap files
 allele_idx = ['A', 'C', 'G', 'T']
 allele_map = {'A':0, 'C':1, 'G':2, 'T':3}
+nGWAS = 0
+nSNPs = [0]*23
 
 ##### Return index of a1 which exist in a2 #####
 def ArrayIn(a1, a2):
@@ -81,19 +86,113 @@ def getIntercept(infile):
 			C.append(tmp)
 	return C
 
+def countGWASfiles(infile):
+	n = 0
+	with open(infile, 'r') as inf:
+		for l in inf:
+			if l.startswith("process"):
+				n += 1
+	return n
+
 ### match rsID
 def match_rsID(ids):
-	if ids[1] == "NA":
-		return ids[2]
-	elif ids[2] == "NA":
+	if ids[0] == "NA":
 		return ids[1]
-	elif ids[1] == ids[2]:
-		return ids[1]
-	else:
+	elif ids[1] == "NA":
 		return ids[0]
+	elif ids[0] == ids[1]:
+		return ids[0]
+	else:
+		return "NA"
 
-### procedd each GWAS sumstat file
-def processFile(gwasfile, C, snps, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, N, weight, rsID, delim, twoside, chromfilt):
+### Update matrices
+def updateMatrix(gwas, chrom, GWASidx, C, nsnps):
+	# global nSNPs
+	if GWASidx == 1 or not os.path.isfile(tmpdir+'/snps'+str(chrom)+'.dat'):
+		### initialize snps, info, w and v
+		# snps: 0:chr, 1:pos, 2:a1, 3:a2 (int)
+		# info: 0:uniqID, 1:rsID, 2:direction (str)
+		# w : store weight per GWAS (int)
+		# v: 0:wz, 1:w2, 2:wwc
+
+		print "Initializing snps matrix..."
+		snps = np.memmap(tmpdir+'/snps'+str(chrom)+'.dat', dtype='int64', mode='w+', shape=(len(gwas), 4))
+		snps[:] = gwas[:,0:4]
+		snps.flush()
+		info = np.memmap(tmpdir+'/info'+str(chrom)+'.dat', dtype='S'+str(nGWAS+10), mode='w+', shape=(len(gwas), 3))
+		info[:] = np.c_[[str(l[1])+":"+"_".join(sorted([str(l[2]), str(l[3])])) for l in gwas], gwas[:,7], ["?"*(GWASidx-1)+'+' if x>0 else "?"*(GWASidx-1)+'-' for x in gwas[:,5].astype(int)]]
+		info.flush()
+
+		print "Initializing weight matrix..."
+		w = np.memmap(tmpdir+'/w'+str(chrom)+'.dat', dtype='int64', mode='w+', shape=(len(gwas), nGWAS))
+		w[:,0] = gwas[:,6]
+		w.flush()
+
+		print "Initializing variable matrix..."
+		v = np.memmap(tmpdir+'/v'+str(chrom)+'.dat', dtype='float128', mode='w+', shape=(len(gwas), 3))
+		v[:,0] = np.multiply(np.sqrt(gwas[:,6].astype(int)), gwas[:,4])
+		v[:,1] = gwas[:,6]
+		v[:,2] = [0]*len(gwas)
+		v.flush()
+
+		nsnps = len(snps)
+		del snps, info, w, v
+	else:
+		print "Checking additional SNPs..."
+		info = np.memmap(tmpdir+'/info'+str(chrom)+'.dat', dtype='S'+str(nGWAS+10), mode='r', shape=(nsnps, 3), order='C')
+		cur_uid = [str(l[1])+":"+"_".join(sorted([str(l[2]), str(l[3])])) for l in gwas]
+		new_idx = ArrayNotIn(cur_uid, info[:,0])
+		print "Detected "+str(len(new_idx))+" additional SNPs"
+		del info
+
+		print "Loading matrices..."
+		snps = np.memmap(tmpdir+'/snps'+str(chrom)+'.dat', dtype='int64', mode='r+', shape=(nsnps+len(new_idx), 4), order='C')
+		info = np.memmap(tmpdir+'/info'+str(chrom)+'.dat', dtype='S'+str(nGWAS+10), mode='r+', shape=(nsnps+len(new_idx), 3), order='C')
+		w = np.memmap(tmpdir+'/w'+str(chrom)+'.dat', dtype='int64', mode='r+', shape=(nsnps+len(new_idx), nGWAS), order='C')
+		v = np.memmap(tmpdir+'/v'+str(chrom)+'.dat', dtype='float128', mode='r+', shape=(nsnps+len(new_idx), 3), order='C')
+
+		n = ArrayIn(cur_uid, info[:,0])
+		m = ArrayIn(info[:,0], cur_uid)
+
+		print "Aligning direction..."
+		gwas[n,5] = [l[2] if l[0]==l[1] else -1*l[2] for l in np.c_[snps[m,2], gwas[n,2], gwas[n,5]]]
+
+		print "Updating matrices..."
+		snps[nsnps:] = gwas[new_idx, 0:4]
+		info[m,1] = [match_rsID(l) for l in np.c_[info[m,1], gwas[n,7]]]
+		info[m,2] = [l[1]+'+' if l[0]>0 else l[1]+'-' for l in np.c_[gwas[n,5], info[m,2]]]
+		info[nsnps:] = np.c_[[str(l[1])+":"+"_".join(sorted([str(l[2]), str(l[3])])) for l in gwas[new_idx]],
+			gwas[new_idx,7],
+			["?"*(GWASidx-1)+'+' if x>0 else "?"*(GWASidx-1)+'-' for x in gwas[new_idx,5].astype(int)]]
+		info[ArrayNotIn(info[0:nsnps,0], cur_uid),2] = [x+"?" for x in info[ArrayNotIn(info[0:nsnps,0], cur_uid),2]]
+		w[m,GWASidx-1] = gwas[n,6]
+		w[nsnps:,GWASidx-1] = gwas[new_idx,6]
+		v[m,0] = np.add(v[m,0], np.multiply(np.sqrt(gwas[n,6].astype(int)), gwas[n,4]))
+		v[m,1] = np.add(v[m,1], gwas[n,6])
+		for i in range(1,GWASidx):
+			v[m,2] = np.add(v[m,2], np.multiply(np.sqrt(w[m,i-1]),np.sqrt(w[m,GWASidx-1]))*C[GWASidx-2][i-1])
+
+		v[nsnps:,0] = np.multiply(np.sqrt(gwas[new_idx,6].astype(int)), gwas[new_idx,4])
+		v[nsnps:,1] = gwas[new_idx,6]
+		v[nsnps:,2] = 0
+
+		### sort by position
+		n = snps[:,1].argsort()
+		snps[:] = snps[n,:]
+		info[:] = info[n,:]
+		w[:] = w[n,:]
+		v[:] = v[n,:]
+		nsnps = len(snps)
+
+		del snps, info, w, v
+	return nsnps
+
+### Process each GWAS sumstat file
+def processFile(gwasfile, C, snps, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, N, weight, rsID, delim, twoside, chromfilt, parallel):
+	global allele_idx
+	global allele_map
+	global nSNPs
+	print "------------------------------------------------"
 	print "Process GWAS "+str(GWASidx)+": "+gwasfile
 	cols = [chrom, pos, a1, a2, p]
 	if rsID is not None:
@@ -126,15 +225,16 @@ def processFile(gwasfile, C, snps, GWASidx, chrom, pos, a1, a2, p, effect, oddsr
 	elif oddsratio is not None:
 		effect = [1 if x>1 else -1 for x in gwas[:,header.index(oddsratio)]]
 	else:
+		print "WARNING: Neither signed effect size or odds ration was gievn, a1 allele is considered as risk increasing allele."
 		effect = [1 for i in range(0, len(gwas))]
 
 	### check weight
 	# if weight is not given, assign N to all SNPs
 	print "Checking weight column..."
 	if weight is not None:
-		weight = np.sqrt(gwas[:,header.index(weight)].astype(int))
+		weight = gwas[:,header.index(weight)].astype(int)
 	else:
-		weight = np.full((len(gwas)), math.sqrt(N))
+		weight = np.full((len(gwas)), int(N))
 
 	### check rsID
 	# if rsID is not given, store "NA"
@@ -145,109 +245,57 @@ def processFile(gwasfile, C, snps, GWASidx, chrom, pos, a1, a2, p, effect, oddsr
 		rsID = ["NA"]*len(gwas)
 
 	### reformat gwas
-	# 0:uniqID, 1:chr, 2:pos, 3:a1, 4:a2, 5:p(Z later), 6:effect, 7:weight, 8:rsID
+	# 0:chr, 1:pos, 2:a1, 3:a2, 4:p(Z later), 5:effect, 6:weight, 7:rsID
 	print "Formatting gwas input..."
 	gwas = gwas[:, [header.index(chrom), header.index(pos), header.index(a1), header.index(a2), header.index(p)]]
-	gwas[:,2] = np.char.upper(gwas[:,2].tolist())
-	gwas[:,3] = np.char.upper(gwas[:,3].tolist())
-	gwas = np.c_[[str(l[0])+":"+str(l[1])+":"+"_".join(sorted([l[2], l[3]])) for l in gwas[:,0:4]], gwas, effect, weight, rsID]
+	# allele convert to int
+	tmp_a = unique(gwas[:,2])
+	tmp_a = [x.upper() for x in unique(tmp_a+gwas[:,3].tolist())]
+	for a in tmp_a:
+		if a not in allele_map:
+			allele_idx.append(a)
+			allele_map[a] = len(allele_idx)-1
+	gwas = np.c_[gwas[:,[0,1]], [allele_map[x.upper()] for x in gwas[:,2]], [allele_map[x.upper()] for x in gwas[:,3]], gwas[:,4:], effect, weight, rsID]
 	effect = None
 	weight = None
 	rsID = None
+	tmp_a = None
 
 	### remove duplicated SNPs
-	n = non_duplicated(gwas[:,0])
+	n = non_duplicated([str(l[0])+":"+str(l[1])+":"+"_".join(sorted([str(l[2]), str(l[3])])) for l in gwas[:,0:4]])
 	if len(n) < len(gwas):
 		print "Warning: "+str(len(gwas)-len(n))+" SNPs are removed due to duplicated uniqID."
-		#gwas = np.take(gwas, n)
 		gwas = gwas.take(n,0)
-	### sort gwas by uniqID
-	n = gwas[:,0].argsort()
+
+	### sort gwas by chr and pos
+	n = np.lexsort((gwas[:,0].astype(int), gwas[:,1].astype(int)))
 	gwas = gwas.take(n,0)
 
-	### align allele and direction
-	if GWASidx > 1:
-		print "Aligning Allele"
-		n = ArrayIn(gwas[:,0],snps[:,0])
-		gwas[n,6] = [x[2] if x[0]==x[1] else -1*x[2] for x in np.c_[gwas[n,3], snps[ArrayIn(snps[:,0],gwas[:,0]),1], gwas[n,6]]]
 	### compute Z
 	print "Converting P to Z score..."
 	# replace P == 0 to the minimum P-value in the input file
-	gwas[gwas[:,5]==0.0,5] = 1e-324
-	gwas[gwas[:,5]==1,5] = 0.999999
+	gwas[gwas[:,4]==0.0,4] = 1e-324
+	gwas[gwas[:,4]==1,4] = 0.999999
 	if twoside:
-		gwas[:,5] = -1.0*gwas[:,6]*st.norm.ppf(list(np.divide(gwas[:,5],2)))
+		gwas[:,4] = -1.0*gwas[:,5]*st.norm.ppf(list(np.divide(gwas[:,4],2)))
 	else:
-		gwas[:,5] = -1.0*st.norm.ppf(list(gwas[:,5]))
+		gwas[:,4] = -1.0*st.norm.ppf(list(gwas[:,4]))
 
-	if GWASidx == 1:
-		### initialize snps, w and v
-		# snps: store, uniqID, a1 and a2
-		# w : store weight per GWAS (squared N)
-		# v: stroe each variables
-		#	0:wz, 1:w2, 2:wwc, 3:direction, 4: rsID
-		print "Initializing snps matrix..."
-		snps = np.c_[gwas[:,[0,3,4]], ["+" if x>0 else "-" for x in gwas[:,6]], gwas[:,8]]
-		print "Initializing weight matrix..."
-		w = np.memmap(tmpdir+'/w.dat', dtype='float128', mode='w+', shape=(len(gwas), 1))
-		w[:,0] = gwas[:,7]
-		w.flush()
-		print "Initializing variable matrix..."
-		v = np.memmap(tmpdir+'/v.dat', dtype='float128', mode='w+', shape=(len(gwas), 3))
-		v[:,0] = np.multiply(gwas[:,7], gwas[:,5])
-		v[:,1] = np.square(gwas[:,7])
-		v[:,2] = [0]*len(gwas)
-		# v = np.c_[np.multiply(gwas[:,7], gwas[:,5]), np.square(gwas[:,7]), [0]*len(gwas)]
-		v.flush()
+	chroms = unique(gwas[:,0])
+	## parallelize
+	if parallel is not None and parallel>0:
+		if parallel > len(chroms):
+			parallel = len(chroms)
+		tmp_nSNPs = Parallel(n_jobs=parallel)(delayed(updateMatrix)(gwas[gwas[:,0]==c], c, GWASidx, C, nSNPs[c-1]) for c in chroms)
+		for i in range(0,len(chroms)):
+			nSNPs[chroms[i]-1] = tmp_nSNPs[i]
 	else:
-		print "Checking additional SNPs..."
-		new_uid = gwas[ArrayNotIn(gwas[:,0],snps[:,0]),0]
-		w_old = np.memmap(tmpdir+'/w.dat', dtype='float128', mode='r', shape=(len(snps), GWASidx-1))
-		w_new = np.memmap(tmpdir+'/w_tmp.dat', dtype='float128', mode='w+', shape=(len(snps)+len(new_uid), GWASidx))
-		w_new[0:len(w_old),0:(GWASidx-1)] = w_old[:]
-		del w_old
-		w = np.memmap(tmpdir+'/w.dat', dtype='float128', mode='w+', shape=(len(snps)+len(new_uid), GWASidx))
-		w[:] = w_new[:]
-		del w_new
-		v = np.memmap(tmpdir+'/v.dat', dtype='float128', mode='r+', shape=(len(snps)+len(new_uid), 3), order='C')
-		# w = np.c_[w, [0]*len(w)]
-		if len(new_uid) > 0:
-			print "Detected additional "+str(len(new_uid))+" SNPs"
-			tmp_idx = ArrayIn(gwas[:,0], new_uid)
-			tmp = np.c_[new_uid, gwas[tmp_idx, 3:5], ["?"*(GWASidx-1)]*len(new_uid),gwas[tmp_idx, 8]]
-			snps = np.r_[snps, tmp]
-			n = snps[:,0].argsort()
-			w[:] = w[n,:]
-			v[:] = v[n,:]
-			snps = snps.take(n,0)
-		w[ArrayIn(snps[:,0], gwas[:,0]),GWASidx-1] = gwas[:,7]
-		print "Updating variables..."
-		n = ArrayIn(snps[:,0],gwas[:,0])
-		v[n,0] = np.add(v[n,0], np.multiply(gwas[:,7], gwas[:,5]))
-		v[n,1] = np.add(v[n,1], np.square(gwas[:,7]))
-		for i in range(1,GWASidx):
-			v[n,2] = np.add(v[n,2], np.multiply(w[n,i-1], w[n,GWASidx-1])*C[GWASidx-2][i-1])
+		for c in chroms:
+			nSNPs[c-1] = updateMatrix(gwas[gwas[:,0]==c], c, GWASidx, C, nSNPs[c-1])
 
-		w.flush()
-		v.flush()
-		### align allele and add direction
-		print "Aligning direction..."
-		# gwas[:,6] = [x[2] if x[0]==x[1] else -1*x[2] for x in np.c_[gwas[:,3], snps[n,1], gwas[:,6]]]
-		snps[n,3] = [x[0]+"+" if x[1]>0 else x[0]+"-" for x in np.c_[snps[n,3], gwas[:,6]]]
-		nidx = ArrayNotIn(snps[:,0], gwas[:,0])
-		snps[nidx,3] = [x+"?" for x in snps[nidx,3]]
-
-		### check rsID
-		# if "NA" is stored, take the new rsID
-		# if rsID doesn't match with store one, replace with uniqID
-		print "Checking rsID..."
-		snps[n,4] = map(match_rsID, np.c_[gwas[:,0], gwas[:,8], snps[n,4]])
-
-	del v,w
-	return snps
 
 ### procedd GWAS
-def processGWAS(config, twoside, C, chromfilt):
+def processGWAS(config, twoside, C, chromfilt, parallel):
 	GWASidx = 0
 	snps = None
 	chrom = None
@@ -294,7 +342,7 @@ def processGWAS(config, twoside, C, chromfilt):
 			elif l[0] == "process":
 				gwasfile = l[1]
 				GWASidx += 1
-				snps = processFile(gwasfile, C, snps, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, N, weight, rsID, delim, twoside, chromfilt)
+				processFile(gwasfile, C, snps, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, N, weight, rsID, delim, twoside, chromfilt, parallel)
 				chrom = None
 				pos = None
 				a1 = None
@@ -307,23 +355,29 @@ def processGWAS(config, twoside, C, chromfilt):
 				weight = None
 
 		# v = np.c_[v, [int(round(sum(np.square(x)))) for x in w[:,1:]]]
-		return GWASidx, snps
+		return
 
 ##### compute z from stored variables and combert to P #####
-def computeZ(snps, nGWAS, twoside):
-	v = np.memmap(tmpdir+'/v.dat', dtype='float128', mode='r+', shape=(len(snps), 3))
-	w = np.memmap(tmpdir+'/w.dat', dtype='float128', mode='r+', shape=(len(snps), nGWAS))
-	z = np.divide(v[:,0].astype(float), np.sqrt(np.add(v[:,1].astype(float), 2*v[:,2].astype(float))))
-	if twoside:
-		p = st.norm.cdf(list(-1.0*np.absolute(z)))*2
-	else:
-		p = st.norm.cdf(list(-1.0*z))
-	Neff = np.divide(np.square(v[:,1].astype(float)), np.add(v[:,1].astype(float), 2*v[:,2].astype(float)))
-	chrom = [int(re.match(r"(\d+):.+", x).group(1)) for x in snps[:,0]]
-	pos = [int(re.match(r"\d+:(\d+):.+", x).group(1)) for x in snps[:,0]]
-
+def computeZ(twoside):
+	out = []
+	for chrom in range(1,24):
+		if os.path.isfile(tmpdir+'/snps'+str(chrom)+'.dat'):
+			snps = np.memmap(tmpdir+'/snps'+str(chrom)+'.dat', dtype='int64', mode='r+', shape=(nSNPs[chrom-1], 4), order='C')
+			info = np.memmap(tmpdir+'/info'+str(chrom)+'.dat', dtype='S'+str(nGWAS+10), mode='r+', shape=(nSNPs[chrom-1], 3), order='C')
+			w = np.memmap(tmpdir+'/w'+str(chrom)+'.dat', dtype='int64', mode='r+', shape=(nSNPs[chrom-1], nGWAS), order='C')
+			v = np.memmap(tmpdir+'/v'+str(chrom)+'.dat', dtype='float128', mode='r+', shape=(nSNPs[chrom-1], 3), order='C')
+			z = np.divide(v[:,0].astype(float), np.sqrt(np.add(v[:,1].astype(float), 2*v[:,2].astype(float))))
+			if twoside:
+				p = st.norm.cdf(list(-1.0*np.absolute(z)))*2
+			else:
+				p = st.norm.cdf(list(-1.0*z))
+			Neff = np.divide(np.square(v[:,1].astype(float)), np.add(v[:,1].astype(float), 2*v[:,2].astype(float)))
+			if len(out)==0:
+				out = np.c_[snps[:,[0,1]], [allele_idx[x] for x in snps[:,2]], [allele_idx[x] for x in snps[:,3]], info[:,1], z, p, [sum(x) for x in w], Neff, info[:,2]]
+			else:
+				out = np.r_[out, np.c_[snps[:,[0,1]], [allele_idx[x] for x in snps[:,2]], [allele_idx[x] for x in snps[:,3]], info[:,1], z, p, [sum(x) for x in w], Neff, info[:,2]]]
 	### return chr, pos, a1, a2, rsID, z, p, weight, direction
-	return np.c_[chrom, pos, snps[:,[1,2]], snps[:,4], z, p, [int(round(sum(np.square(x)))) for x in w], Neff, snps[:,3]]
+	return out
 
 def main(args):
 	start_time = time.time()
@@ -338,13 +392,19 @@ def main(args):
 		parser.print_help()
 		sys.exit("\nERROR: Intercept file is required.")
 
+	### get intercept matrix
 	C = getIntercept(args.intercept)
+	### count the number of GWAS to process
+	global nGWAS
+	nGWAS = countGWASfiles(args.config)
 
-	nGWAS, snps = processGWAS(args.config, args.twoside, C, args.chrom)
+	processGWAS(args.config, args.twoside, C, args.chrom, args.parallel)
+	print "------------------------------------------------\n"
 
-	results = computeZ(snps, nGWAS, args.twoside)
-	results = results[np.lexsort((results[:,1], results[:,0]))]
-
+	results = computeZ(args.twoside)
+	### replace rsID=NA to uniqID
+	results[results[:,4]=="NA",4] = [[str(l[0])+":"+str(l[1])+":"+"_".join(sorted([l[2], l[3]])) for l in results[results[:,4]=="NA",0:4]]]
+	print "Writing results...\n"
 	with open(args.out+".txt", 'w') as o:
 		o.write("\t".join(["chr", "pos", "a1", "a2", "rsID", "z", "p", "weight", "Neff", "direction"])+"\n")
 	with open(args.out+".txt", 'a') as o:
