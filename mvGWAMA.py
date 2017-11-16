@@ -274,7 +274,7 @@ def processFile(gwasfile, C, snps, GWASidx, chrom, pos, a1, a2, p, effect, oddsr
 	### compute Z
 	print "Converting P to Z score..."
 	# replace P == 0 to the minimum P-value in the input file
-	gwas[gwas[:,4]==0.0,4] = 1e-324
+	gwas[gwas[:,4]==0.0,4] = 1e-323
 	gwas[gwas[:,4]==1,4] = 0.999999
 	if twoside:
 		gwas[:,4] = -1.0*gwas[:,5]*st.norm.ppf(list(np.divide(gwas[:,4],2)))
