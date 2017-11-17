@@ -44,6 +44,7 @@ allele_idx = ['A', 'C', 'G', 'T']
 allele_map = {'A':0, 'C':1, 'G':2, 'T':3}
 nGWAS = 0
 nSNPs = [0]*23
+Nall = []
 
 ##### Return index of a1 which exist in a2 #####
 def ArrayIn(a1, a2):
@@ -192,6 +193,7 @@ def processFile(gwasfile, C, snps, GWASidx, chrom, pos, a1, a2, p, effect, oddsr
 	global allele_idx
 	global allele_map
 	global nSNPs
+	global Nall
 	print "------------------------------------------------"
 	print "Process GWAS "+str(GWASidx)+": "+gwasfile
 	cols = [chrom, pos, a1, a2, p]
@@ -206,6 +208,11 @@ def processFile(gwasfile, C, snps, GWASidx, chrom, pos, a1, a2, p, effect, oddsr
 	gwas = pd.read_table(gwasfile, sep=delim, header=0, usecols=cols)
 	header = list(gwas.columns.values)
 	gwas = np.array(gwas)
+
+	if N is not None:
+		Nall.append(int(N))
+	else:
+		Nall.append(max(gwas[:,header.index(weight)].astype(int)))
 
 	### filter on chr
 	if chromfilt is not None:
@@ -371,13 +378,58 @@ def computeZ(twoside):
 				p = st.norm.cdf(list(-1.0*np.absolute(z)))*2
 			else:
 				p = st.norm.cdf(list(-1.0*z))
-			Neff = np.divide(np.square(v[:,1].astype(float)), np.add(v[:,1].astype(float), 2*v[:,2].astype(float)))
 			if len(out)==0:
-				out = np.c_[snps[:,[0,1]], [allele_idx[x] for x in snps[:,2]], [allele_idx[x] for x in snps[:,3]], info[:,1], z, p, [sum(x) for x in w], Neff, info[:,2]]
+				out = np.c_[snps[:,[0,1]], [allele_idx[x] for x in snps[:,2]], [allele_idx[x] for x in snps[:,3]], info[:,1], z, p, [sum(x) for x in w], info[:,2]]
 			else:
-				out = np.r_[out, np.c_[snps[:,[0,1]], [allele_idx[x] for x in snps[:,2]], [allele_idx[x] for x in snps[:,3]], info[:,1], z, p, [sum(x) for x in w], Neff, info[:,2]]]
+				out = np.r_[out, np.c_[snps[:,[0,1]], [allele_idx[x] for x in snps[:,2]], [allele_idx[x] for x in snps[:,3]], info[:,1], z, p, [sum(x) for x in w], info[:,2]]]
 	### return chr, pos, a1, a2, rsID, z, p, weight, direction
 	return out
+
+##### reduce N matrix
+def reduceMat(M):
+	if M[0,0]<0: return M[1:,1:]
+	prop = M[1:,0]/np.diag(M)[1:]
+	return M[1:,1:]*(1-prop)
+
+##### compute effective N recursively
+def NeffMap(M):
+	if M[0,0]<0: M[0,0]=0
+	if len(M)<=1: return M[0,0]
+	else: return M[0,0]+NeffMap(reduceMat(M))
+
+def getNeffPerSNP(C):
+	Neff = []
+	for chrom in range(1,24):
+		if os.path.isfile(tmpdir+'/snps'+str(chrom)+'.dat'):
+			w = np.memmap(tmpdir+'/w'+str(chrom)+'.dat', dtype='int64', mode='r+', shape=(nSNPs[chrom-1], nGWAS), order='C')
+			for l in w:
+				Nmat = []
+				for i in range(0,nGWAS):
+					if i==0:
+						Nmat.append([l[i]]+[0]*(nGWAS-1))
+					else:
+						tmp = []
+						for j in range(0,i):
+							tmp.append(math.sqrt(l[i]*l[j])*C[i-1][j])
+						Nmat.append(tmp+[l[i]]+[0]*(nGWAS-1-i))
+				Nmat = np.array(Nmat).astype(float)
+				n = np.where(np.diag(Nmat)>0)
+				Neff.append(NeffMap(Nmat[n,n]))
+	return Neff
+
+def getNeff(C):
+	global Nall
+	Nmat = []
+	for i in range(0,nGWAS):
+		if i==0:
+			Nmat.append([Nall[i]]+[0]*(nGWAS-1))
+		else:
+			tmp = []
+			for j in range(0,i):
+				tmp.append(math.sqrt(Nall[i]*Nall[j])*C[i-1][j])
+			Nmat.append(tmp+[Nall[i]]+[0]*(nGWAS-1-i))
+	Nmat = np.array(Nmat).astype(float)
+	return NeffMap(Nmat)
 
 def main(args):
 	start_time = time.time()
@@ -394,17 +446,31 @@ def main(args):
 
 	### get intercept matrix
 	C = getIntercept(args.intercept)
+
 	### count the number of GWAS to process
 	global nGWAS
 	nGWAS = countGWASfiles(args.config)
 
+	### process files and store variables
 	processGWAS(args.config, args.twoside, C, args.chrom, args.parallel)
 	print "------------------------------------------------\n"
 
+	### compute test statistics
 	results = computeZ(args.twoside)
-	### replace rsID=NA to uniqID
+	## replace rsID=NA to uniqID
 	results[results[:,4]=="NA",4] = [[str(l[0])+":"+str(l[1])+":"+"_".join(sorted([l[2], l[3]])) for l in results[results[:,4]=="NA",0:4]]]
-	print "Writing results...\n"
+
+	### compute effective sample size
+	Neff = getNeffPerSNP(C)
+	Neff_total = getNeff(C)
+	Nprop = Neff_total/sum(Nall)
+	print "Sum of sample size: "+str(sum(Nall))
+	print "Effective sample size: "+str(Neff_total)
+	print "Proportion of Neff to Nsum: "+str(Nprop)
+
+	# results = np.c_[results[:,0:8], [round(x,2) for x in results[:,7].astype(float)*Nprop], results[:,8]]
+	results = np.c_[results[:,0:8], [round(x,2) for x in Neff], results[:,8]]
+
 	with open(args.out+".txt", 'w') as o:
 		o.write("\t".join(["chr", "pos", "a1", "a2", "rsID", "z", "p", "weight", "Neff", "direction"])+"\n")
 	with open(args.out+".txt", 'a') as o:
