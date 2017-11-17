@@ -81,8 +81,8 @@ def non_duplicated(a):
 # C is winsolized between -1 and 1
 def getIntercept(infile):
 	C = []
-	with open(infile, 'r') as inf:
-		for l in inf:
+	with open(infile, 'r') as fin:
+		for l in fin:
 			l = l.strip().split()
 			tmp = [abs(float(x)) if float(x)>=-1 and float(x)<=1 else float(1) for x in l]
 			C.append(tmp)
@@ -94,6 +94,9 @@ def countGWASfiles(infile):
 		for l in inf:
 			if l.startswith("process"):
 				n += 1
+				f = l.split()[1]
+				if not os.path.isfile(f):
+					sys.exit("\n ERROR: Input GWAS file '"+f+"' does not exist.")
 	return n
 
 ### match rsID
@@ -208,8 +211,7 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 	global allele_map
 	global nSNPs
 	global Nall
-	print "------------------------------------------------"
-	print "Process GWAS "+str(GWASidx)+": "+gwasfile
+
 	cols = [chrom, pos, a1, a2, p]
 	if rsID is not None:
 		cols.append(rsID)
@@ -222,6 +224,8 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 	gwas = pd.read_table(gwasfile, sep=delim, header=0, usecols=cols)
 	header = list(gwas.columns.values)
 	gwas = np.array(gwas)
+	if type(gwas[0,header.index(chrom)]) is str:
+		gwas[:,header.index(chrom)] = [x.replace('chr','').replace('X','23').replace('x','23') for x in gwas[:,header.index(chrom)]]
 
 	if N is not None:
 		Nall.append(int(N))
@@ -295,8 +299,12 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 	### compute Z
 	print "Converting P to Z score..."
 	# replace P == 0 to the minimum P-value in the input file
-	gwas[gwas[:,4]==0.0,4] = 1e-323
-	gwas[gwas[:,4]==1,4] = 0.999999
+	if len(np.where(gwas[:,4]==0.0)[0])>0:
+		print "WARNING: P-value < 1e-323 is replaced with 1e-323"
+		gwas[gwas[:,4]==0.0,4] = 1e-323
+	if len(np.where(gwas[:,4]==1)[0])>0:
+		print "WARNING: P-value 1 is replaced with 0.999999"
+		gwas[gwas[:,4]==1,4] = 0.999999
 	if args.twoside:
 		gwas[:,4] = -1.0*gwas[:,5]*st.norm.ppf(list(np.divide(gwas[:,4],2)))
 	else:
@@ -307,12 +315,12 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 	if args.parallel is not None and args.parallel>0:
 		if args.parallel > len(chroms):
 			args.parallel = len(chroms)
-		tmp_nSNPs = Parallel(n_jobs=args.parallel)(delayed(updateMatrix)(gwas[gwas[:,0]==c], c, GWASidx, C, nSNPs[c-1], args.no_weight) for c in chroms)
+		# tmp_nSNPs = Parallel(n_jobs=args.parallel)(delayed(updateMatrix)(gwas[gwas[:,0]==c], c, GWASidx, C, nSNPs[c-1], args.no_weight) for c in chroms)
 		for i in range(0,len(chroms)):
 			nSNPs[chroms[i]-1] = tmp_nSNPs[i]
 	else:
 		for c in chroms:
-			nSNPs[c-1] = updateMatrix(gwas[gwas[:,0]==c], c, GWASidx, C, nSNPs[c-1], args.no_weight)
+			nSNPs[int(c)-1] = updateMatrix(gwas[gwas[:,0]==c], int(c), GWASidx, C, nSNPs[int(c)-1], args.no_weight)
 
 
 ### process GWAS
@@ -363,6 +371,12 @@ def processGWAS(C, args):
 			elif l[0] == "process":
 				gwasfile = l[1]
 				GWASidx += 1
+				print "------------------------------------------------"
+				print "Process GWAS "+str(GWASidx)+": "+gwasfile
+				if not (chrom and pos and a1 and a2 and p):
+					sys.exit("\nERROR: Not enought columns are provided in the config file. Chrom, pos, a1, a2 and p columns are required for all input GWAS files.")
+				if not (N or weight):
+					sys.exit("\nERROR: Neither N nor weight are provided in the config file.")
 				processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, N, weight, rsID, delim, args)
 				chrom = None
 				pos = None
@@ -448,6 +462,11 @@ def getNeff(C):
 def main(args):
 	start_time = time.time()
 
+	global HEADMSS
+	HEADMSS += "Flags used:\n"
+	opts = vars(args)
+	options = ['--'+x.replace('_', '-')+' '+str(opts[x])+' \\' for x in opts.keys() if opts[x]]
+	HEADMSS += "\t"+"\n\t".join(options).replace('True','').replace('False','')
 	print HEADMSS
 
 	### check arguments
@@ -458,12 +477,21 @@ def main(args):
 		parser.print_help()
 		sys.exit("\nERROR: Intercept file is required.")
 
-	### get intercept matrix
-	C = getIntercept(args.intercept)
+	### check input files
+	if not os.path.isfile(args.config):
+		sys.exit("\nERROR: Config file '"+args.config+"' does not exist.")
+	if not os.path.isfile(args.intercept):
+		sys.exit("\nERROR: Intercept file '"+args.intercept+"' does not exist.")
 
-	### count the number of GWAS to process
+	### count the number of GWAS to process and check if the file exist
 	global nGWAS
 	nGWAS = countGWASfiles(args.config)
+	print "\nDetected "+str(nGWAS)+" input GWAS files.\n"
+
+	### get intercept matrix
+	C = getIntercept(args.intercept)
+	if len(C) != nGWAS-1:
+		sys.exit("\nERROR: The dimention of intercept matrix is wrong. The matrix should be lower off diagonal of pariwise intercept.")
 
 	### process files and store variables
 	processGWAS(C, args)
@@ -488,6 +516,7 @@ def main(args):
 		results = np.c_[results[:,0:8], [round(x,2) for x in Neff], results[:,8]]
 	else:
 		print "WARNING: Use ratio of total Neff to total Nsum to compute per SNP Neff"
+		print "         Use --neff-per-snp flag to compute accurate per SNP Neff."
 		results = np.c_[results[:,0:8], [round(x,2) for x in results[:,7].astype(float)*Nprop], results[:,8]]
 
 	with open(args.out+".txt", 'w') as o:
