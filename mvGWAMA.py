@@ -31,11 +31,11 @@ HEADMSS += "#####################################################\n"
 parser = argparse.ArgumentParser()
 parser.add_argument('-c', '--config', default=None, type=str, help="(Required) Config file of summary statistics.")
 parser.add_argument('-i', '--intercept', default=None, type=str, help="(Required) File name of the intercelpt matrix (lower triangle).")
-parser.add_argument('-o', '--out', default="multivariateGWAS", type=str, help="Output file name. 'multivariateGWAS' by default.")
-parser.add_argument('--twoside', default=False, action='store_true', help="Use this flag to convert P to Z by two sided.")
+parser.add_argument('-o', '--out', default="mvGWAMA", type=str, help="Output file name. 'mvGWAMA' by default.")
 parser.add_argument('-ch', '--chrom', default=None, type=int, help="To run for a specific chromosome.")
 parser.add_argument('-p', '--parallel', default=None, type=int, help="To parallelize process, provide the number of cores/thread.")
-
+parser.add_argument('--twoside', default=False, action='store_true', help="Use this flag to convert P to Z by two sided.")
+parser.add_argument('--neff-per-snp', default=False, action='store_true', help="Use this flag to compute effective samplesize per SNP (runtime will be longer). Otherwise, per SNP effect size is computed based on proportion of total Neff to total Nsum.")
 #parser.add_argument('--no-weight', default=False, action='store_true', help="Use this flag to not weight by sample size.")
 
 ### global variable
@@ -77,7 +77,7 @@ def non_duplicated(a):
 ### read intercept matrix
 # input file should contain lower triangle (excluding diagonal)
 # take absolute value (v 0.0.0)
-# C = [-1,1]
+# C is winsolized between -1 and 1
 def getIntercept(infile):
 	C = []
 	with open(infile, 'r') as inf:
@@ -461,21 +461,26 @@ def main(args):
 	results[results[:,4]=="NA",4] = [[str(l[0])+":"+str(l[1])+":"+"_".join(sorted([l[2], l[3]])) for l in results[results[:,4]=="NA",0:4]]]
 
 	### compute effective sample size
-	Neff = getNeffPerSNP(C)
 	Neff_total = getNeff(C)
 	Nprop = Neff_total/sum(Nall)
+	print "***Sample size***"
 	print "Sum of sample size: "+str(sum(Nall))
-	print "Effective sample size: "+str(Neff_total)
-	print "Proportion of Neff to Nsum: "+str(Nprop)
+	print "Effective sample size: "+str(round(Neff_total,2))
+	print "Proportion of Neff to Nsum: "+str(round(Nprop,4))
 
-	# results = np.c_[results[:,0:8], [round(x,2) for x in results[:,7].astype(float)*Nprop], results[:,8]]
-	results = np.c_[results[:,0:8], [round(x,2) for x in Neff], results[:,8]]
+	if args.neff_per_snp:
+		print "Computing per SNP Neff..."
+		Neff = getNeffPerSNP(C)
+		results = np.c_[results[:,0:8], [round(x,2) for x in Neff], results[:,8]]
+	else:
+		print "WARNING: Use ratio of total Neff to total Nsum to compute per SNP Neff"
+		results = np.c_[results[:,0:8], [round(x,2) for x in results[:,7].astype(float)*Nprop], results[:,8]]
 
 	with open(args.out+".txt", 'w') as o:
-		o.write("\t".join(["chr", "pos", "a1", "a2", "rsID", "z", "p", "weight", "Neff", "direction"])+"\n")
+		o.write("\t".join(["chr", "pos", "a1", "a2", "rsID", "z", "p", "Nsum", "Neff", "direction"])+"\n")
 	with open(args.out+".txt", 'a') as o:
 		np.savetxt(o, results, delimiter="\t", fmt="%s")
 	os.system("rm -r "+tmpdir)
-	print "Program run time: "+str(time.time()-start_time)
+	print "\nProcess completed\nProgram run time: "+str(round(time.time()-start_time,2))+" sec"
 
 if __name__ == "__main__": main(parser.parse_args())
