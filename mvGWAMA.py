@@ -20,12 +20,13 @@ from tempfile import mkdtemp
 from joblib import Parallel, delayed
 
 __version__ = '0.0.0'
+__date__ = '17/Nov/2017'
 HEADMSS = "#####################################################\n"
 HEADMSS += "# Multivariate genome-wide association meta-analysis\n"
-HEADMSS += "# mvGWAMA.py\n"
-HEADMSS += "# Version {V}\n".format(V=__version__)
+HEADMSS += "# Version: {V}\n".format(V=__version__)
+HEADMSS += "# Last update: {D}\n".format(D=__date__)
 HEADMSS += "# (c) 2017 Kyoko Watanabe\n"
-HEADMSS += "# MIT Licence\n"
+HEADMSS += "# GNU General Public Licence v3\n"
 HEADMSS += "#####################################################\n"
 
 parser = argparse.ArgumentParser()
@@ -36,7 +37,7 @@ parser.add_argument('-ch', '--chrom', default=None, type=int, help="To run for a
 parser.add_argument('-p', '--parallel', default=None, type=int, help="To parallelize process, provide the number of cores/thread.")
 parser.add_argument('--twoside', default=False, action='store_true', help="Use this flag to convert P to Z by two sided.")
 parser.add_argument('--neff-per-snp', default=False, action='store_true', help="Use this flag to compute effective samplesize per SNP (runtime will be longer). Otherwise, per SNP effect size is computed based on proportion of total Neff to total Nsum.")
-#parser.add_argument('--no-weight', default=False, action='store_true', help="Use this flag to not weight by sample size.")
+parser.add_argument('--no-weight', default=False, action='store_true', help="Use this flag to not weight by sample size.")
 
 ### global variable
 tmpdir = os.path.join(mkdtemp()) #path to temp for memmap files
@@ -107,7 +108,7 @@ def match_rsID(ids):
 		return "NA"
 
 ### Update matrices
-def updateMatrix(gwas, chrom, GWASidx, C, nsnps):
+def updateMatrix(gwas, chrom, GWASidx, C, nsnps, noweight):
 	# global nSNPs
 	if GWASidx == 1 or not os.path.isfile(tmpdir+'/snps'+str(chrom)+'.dat'):
 		### initialize snps, info, w and v
@@ -131,9 +132,13 @@ def updateMatrix(gwas, chrom, GWASidx, C, nsnps):
 
 		print "Initializing variable matrix..."
 		v = np.memmap(tmpdir+'/v'+str(chrom)+'.dat', dtype='float128', mode='w+', shape=(len(gwas), 3))
-		v[:,0] = np.multiply(np.sqrt(gwas[:,6].astype(int)), gwas[:,4])
-		v[:,1] = gwas[:,6]
-		v[:,2] = [0]*len(gwas)
+		if noweight:
+			v[:,0] = gwas[:,4]
+			v[:,1] = 1
+		else:
+			v[:,0] = np.multiply(np.sqrt(gwas[:,6].astype(int)), gwas[:,4])
+			v[:,1] = gwas[:,6]
+		v[:,2] = 0
 		v.flush()
 
 		nsnps = len(snps)
@@ -168,14 +173,23 @@ def updateMatrix(gwas, chrom, GWASidx, C, nsnps):
 		info[ArrayNotIn(info[0:nsnps,0], cur_uid),2] = [x+"?" for x in info[ArrayNotIn(info[0:nsnps,0], cur_uid),2]]
 		w[m,GWASidx-1] = gwas[n,6]
 		w[nsnps:,GWASidx-1] = gwas[new_idx,6]
-		v[m,0] = np.add(v[m,0], np.multiply(np.sqrt(gwas[n,6].astype(int)), gwas[n,4]))
-		v[m,1] = np.add(v[m,1], gwas[n,6])
-		for i in range(1,GWASidx):
-			v[m,2] = np.add(v[m,2], np.multiply(np.sqrt(w[m,i-1]),np.sqrt(w[m,GWASidx-1]))*C[GWASidx-2][i-1])
 
-		v[nsnps:,0] = np.multiply(np.sqrt(gwas[new_idx,6].astype(int)), gwas[new_idx,4])
-		v[nsnps:,1] = gwas[new_idx,6]
-		v[nsnps:,2] = 0
+		if noweight:
+			v[m,0] = np.add(v[m,0], gwas[n,4])
+			v[m,1] = np.add(v[m,1], [1]*len(m))
+			for i in range(1,GWASidx):
+				v[m,2] = np.add(v[m,2], C[GWASidx-2][i-1])
+			v[nsnps:,0] = gwas[new_idx,4]
+			v[nsnps:,1] = 1
+			v[nsnps:,2] = 0
+		else:
+			v[m,0] = np.add(v[m,0], np.multiply(np.sqrt(gwas[n,6].astype(int)), gwas[n,4]))
+			v[m,1] = np.add(v[m,1], gwas[n,6])
+			for i in range(1,GWASidx):
+				v[m,2] = np.add(v[m,2], np.multiply(np.sqrt(w[m,i-1]),np.sqrt(w[m,GWASidx-1]))*C[GWASidx-2][i-1])
+			v[nsnps:,0] = np.multiply(np.sqrt(gwas[new_idx,6].astype(int)), gwas[new_idx,4])
+			v[nsnps:,1] = gwas[new_idx,6]
+			v[nsnps:,2] = 0
 
 		### sort by position
 		n = snps[:,1].argsort()
@@ -189,7 +203,7 @@ def updateMatrix(gwas, chrom, GWASidx, C, nsnps):
 	return nsnps
 
 ### Process each GWAS sumstat file
-def processFile(gwasfile, C, snps, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, N, weight, rsID, delim, twoside, chromfilt, parallel):
+def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, N, weight, rsID, delim, args):
 	global allele_idx
 	global allele_map
 	global nSNPs
@@ -215,9 +229,9 @@ def processFile(gwasfile, C, snps, GWASidx, chrom, pos, a1, a2, p, effect, oddsr
 		Nall.append(max(gwas[:,header.index(weight)].astype(int)))
 
 	### filter on chr
-	if chromfilt is not None:
-		print "Filtering on chromosome "+str(chromfilt)
-		gwas = gwas[gwas[:,header.index(chrom)].astype(int)==chromfilt]
+	if args.chrom is not None:
+		print "Filtering on chromosome "+str(args.chrom)
+		gwas = gwas[gwas[:,header.index(chrom)].astype(int)==args.chrom]
 
 	print "Detected "+str(len(gwas))+" SNPs in the file"
 	### check header
@@ -241,7 +255,7 @@ def processFile(gwasfile, C, snps, GWASidx, chrom, pos, a1, a2, p, effect, oddsr
 	if weight is not None:
 		weight = gwas[:,header.index(weight)].astype(int)
 	else:
-		weight = np.full((len(gwas)), int(N))
+		weight = [int(N)]*len(gwas)
 
 	### check rsID
 	# if rsID is not given, store "NA"
@@ -283,26 +297,26 @@ def processFile(gwasfile, C, snps, GWASidx, chrom, pos, a1, a2, p, effect, oddsr
 	# replace P == 0 to the minimum P-value in the input file
 	gwas[gwas[:,4]==0.0,4] = 1e-323
 	gwas[gwas[:,4]==1,4] = 0.999999
-	if twoside:
+	if args.twoside:
 		gwas[:,4] = -1.0*gwas[:,5]*st.norm.ppf(list(np.divide(gwas[:,4],2)))
 	else:
 		gwas[:,4] = -1.0*st.norm.ppf(list(gwas[:,4]))
 
 	chroms = unique(gwas[:,0])
 	## parallelize
-	if parallel is not None and parallel>0:
-		if parallel > len(chroms):
-			parallel = len(chroms)
-		tmp_nSNPs = Parallel(n_jobs=parallel)(delayed(updateMatrix)(gwas[gwas[:,0]==c], c, GWASidx, C, nSNPs[c-1]) for c in chroms)
+	if args.parallel is not None and args.parallel>0:
+		if args.parallel > len(chroms):
+			args.parallel = len(chroms)
+		tmp_nSNPs = Parallel(n_jobs=args.parallel)(delayed(updateMatrix)(gwas[gwas[:,0]==c], c, GWASidx, C, nSNPs[c-1], args.no_weight) for c in chroms)
 		for i in range(0,len(chroms)):
 			nSNPs[chroms[i]-1] = tmp_nSNPs[i]
 	else:
 		for c in chroms:
-			nSNPs[c-1] = updateMatrix(gwas[gwas[:,0]==c], c, GWASidx, C, nSNPs[c-1])
+			nSNPs[c-1] = updateMatrix(gwas[gwas[:,0]==c], c, GWASidx, C, nSNPs[c-1], args.no_weight)
 
 
-### procedd GWAS
-def processGWAS(config, twoside, C, chromfilt, parallel):
+### process GWAS
+def processGWAS(C, args):
 	GWASidx = 0
 	snps = None
 	chrom = None
@@ -317,7 +331,7 @@ def processGWAS(config, twoside, C, chromfilt, parallel):
 	weight = None
 	delim = "\t"
 
-	with open(config, 'r') as inconfig:
+	with open(args.config, 'r') as inconfig:
 		for l in inconfig:
 			if l=="\n":
 				continue
@@ -349,7 +363,7 @@ def processGWAS(config, twoside, C, chromfilt, parallel):
 			elif l[0] == "process":
 				gwasfile = l[1]
 				GWASidx += 1
-				processFile(gwasfile, C, snps, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, N, weight, rsID, delim, twoside, chromfilt, parallel)
+				processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, N, weight, rsID, delim, args)
 				chrom = None
 				pos = None
 				a1 = None
@@ -452,7 +466,7 @@ def main(args):
 	nGWAS = countGWASfiles(args.config)
 
 	### process files and store variables
-	processGWAS(args.config, args.twoside, C, args.chrom, args.parallel)
+	processGWAS(C, args)
 	print "------------------------------------------------\n"
 
 	### compute test statistics
@@ -477,7 +491,7 @@ def main(args):
 		results = np.c_[results[:,0:8], [round(x,2) for x in results[:,7].astype(float)*Nprop], results[:,8]]
 
 	with open(args.out+".txt", 'w') as o:
-		o.write("\t".join(["chr", "pos", "a1", "a2", "rsID", "z", "p", "Nsum", "Neff", "direction"])+"\n")
+		o.write("\t".join(["chr", "pos", "a1", "a2", "rsID", "z", "p", "Nsum", "Neff", "dir"])+"\n")
 	with open(args.out+".txt", 'a') as o:
 		np.savetxt(o, results, delimiter="\t", fmt="%s")
 	os.system("rm -r "+tmpdir)
