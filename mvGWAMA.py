@@ -16,6 +16,7 @@ import argparse
 import scipy.stats as st
 import math
 import time
+import logging
 from tempfile import mkdtemp
 from joblib import Parallel, delayed
 
@@ -96,7 +97,8 @@ def countGWASfiles(infile):
 				n += 1
 				f = l.split()[1]
 				if not os.path.isfile(f):
-					sys.exit("\n ERROR: Input GWAS file '"+f+"' does not exist.")
+					logging.error("\n ERROR: Input GWAS file '"+f+"' does not exist.")
+					sys.exit()
 	return n
 
 ### match rsID
@@ -120,7 +122,7 @@ def updateMatrix(gwas, chrom, GWASidx, C, nsnps, noweight):
 		# w : store weight per GWAS (int)
 		# v: 0:wz, 1:w2, 2:wwc
 
-		print "Initializing snps matrix..."
+		logging.info("Initializing snps matrix...")
 		snps = np.memmap(tmpdir+'/snps'+str(chrom)+'.dat', dtype='int64', mode='w+', shape=(len(gwas), 4))
 		snps[:] = gwas[:,0:4]
 		snps.flush()
@@ -128,12 +130,12 @@ def updateMatrix(gwas, chrom, GWASidx, C, nsnps, noweight):
 		info[:] = np.c_[[str(l[1])+":"+"_".join(sorted([str(l[2]), str(l[3])])) for l in gwas], gwas[:,7], ["?"*(GWASidx-1)+'+' if x>0 else "?"*(GWASidx-1)+'-' for x in gwas[:,5].astype(int)]]
 		info.flush()
 
-		print "Initializing weight matrix..."
+		logging.info("Initializing weight matrix...")
 		w = np.memmap(tmpdir+'/w'+str(chrom)+'.dat', dtype='int64', mode='w+', shape=(len(gwas), nGWAS))
 		w[:,0] = gwas[:,6]
 		w.flush()
 
-		print "Initializing variable matrix..."
+		logging.info("Initializing variable matrix...")
 		v = np.memmap(tmpdir+'/v'+str(chrom)+'.dat', dtype='float128', mode='w+', shape=(len(gwas), 3))
 		if noweight:
 			v[:,0] = gwas[:,4]
@@ -147,14 +149,14 @@ def updateMatrix(gwas, chrom, GWASidx, C, nsnps, noweight):
 		nsnps = len(snps)
 		del snps, info, w, v
 	else:
-		print "Checking additional SNPs..."
+		logging.info("Checking additional SNPs...")
 		info = np.memmap(tmpdir+'/info'+str(chrom)+'.dat', dtype='S'+str(nGWAS+10), mode='r', shape=(nsnps, 3), order='C')
 		cur_uid = [str(l[1])+":"+"_".join(sorted([str(l[2]), str(l[3])])) for l in gwas]
 		new_idx = ArrayNotIn(cur_uid, info[:,0])
-		print "Detected "+str(len(new_idx))+" additional SNPs"
+		logging.info("Detected "+str(len(new_idx))+" additional SNPs")
 		del info
 
-		print "Loading matrices..."
+		logging.info("Loading matrices...")
 		snps = np.memmap(tmpdir+'/snps'+str(chrom)+'.dat', dtype='int64', mode='r+', shape=(nsnps+len(new_idx), 4), order='C')
 		info = np.memmap(tmpdir+'/info'+str(chrom)+'.dat', dtype='S'+str(nGWAS+10), mode='r+', shape=(nsnps+len(new_idx), 3), order='C')
 		w = np.memmap(tmpdir+'/w'+str(chrom)+'.dat', dtype='int64', mode='r+', shape=(nsnps+len(new_idx), nGWAS), order='C')
@@ -163,10 +165,10 @@ def updateMatrix(gwas, chrom, GWASidx, C, nsnps, noweight):
 		n = ArrayIn(cur_uid, info[:,0])
 		m = ArrayIn(info[:,0], cur_uid)
 
-		print "Aligning direction..."
+		logging.info("Aligning direction...")
 		gwas[n,5] = [l[2] if l[0]==l[1] else -1*l[2] for l in np.c_[snps[m,2], gwas[n,2], gwas[n,5]]]
 
-		print "Updating matrices..."
+		logging.info("Updating matrices...")
 		snps[nsnps:] = gwas[new_idx, 0:4]
 		info[m,1] = [match_rsID(l) for l in np.c_[info[m,1], gwas[n,7]]]
 		info[m,2] = [l[1]+'+' if l[0]>0 else l[1]+'-' for l in np.c_[gwas[n,5], info[m,2]]]
@@ -234,28 +236,28 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 
 	### filter on chr
 	if args.chrom is not None:
-		print "Filtering on chromosome "+str(args.chrom)
+		logging.info("Filtering on chromosome "+str(args.chrom))
 		gwas = gwas[gwas[:,header.index(chrom)].astype(int)==args.chrom]
 
-	print "Detected "+str(len(gwas))+" SNPs in the file"
+	logging.info("Detected "+str(len(gwas))+" SNPs in the file")
 	### check header
 
 	### check effect
 	# if oddsratio is given instead effec, take log
 	# if both are not given, assume a1 alele has increasing risk
 	# convert effect to 1/-1
-	print "Checking effect column..."
+	logging.info("Checking effect column...")
 	if effect is not None:
 		effect = [1 if x>0 else -1 for x in gwas[:,header.index(effect)]]
 	elif oddsratio is not None:
 		effect = [1 if x>1 else -1 for x in gwas[:,header.index(oddsratio)]]
 	else:
-		print "WARNING: Neither signed effect size or odds ration was gievn, a1 allele is considered as risk increasing allele."
+		logging.warning("WARNING: Neither signed effect size or odds ration was gievn, a1 allele is considered as risk increasing allele.")
 		effect = [1 for i in range(0, len(gwas))]
 
 	### check weight
 	# if weight is not given, assign N to all SNPs
-	print "Checking weight column..."
+	logging.info("Checking weight column...")
 	if weight is not None:
 		weight = gwas[:,header.index(weight)].astype(int)
 	else:
@@ -263,7 +265,7 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 
 	### check rsID
 	# if rsID is not given, store "NA"
-	print "Checking rsID column..."
+	logging.info("Checking rsID column...")
 	if rsID is not None:
 		rsID = gwas[:,header.index(rsID)]
 	else:
@@ -271,7 +273,7 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 
 	### reformat gwas
 	# 0:chr, 1:pos, 2:a1, 3:a2, 4:p(Z later), 5:effect, 6:weight, 7:rsID
-	print "Formatting gwas input..."
+	logging.info("Formatting gwas input...")
 	gwas = gwas[:, [header.index(chrom), header.index(pos), header.index(a1), header.index(a2), header.index(p)]]
 	# allele convert to int
 	tmp_a = unique(gwas[:,2])
@@ -289,7 +291,7 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 	### remove duplicated SNPs
 	n = non_duplicated([str(l[0])+":"+str(l[1])+":"+"_".join(sorted([str(l[2]), str(l[3])])) for l in gwas[:,0:4]])
 	if len(n) < len(gwas):
-		print "Warning: "+str(len(gwas)-len(n))+" SNPs are removed due to duplicated uniqID."
+		logging.warning("Warning: "+str(len(gwas)-len(n))+" SNPs are removed due to duplicated uniqID.")
 		gwas = gwas.take(n,0)
 
 	### sort gwas by chr and pos
@@ -297,13 +299,13 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 	gwas = gwas.take(n,0)
 
 	### compute Z
-	print "Converting P to Z score..."
+	logging.info("Converting P to Z score...")
 	# replace P == 0 to the minimum P-value in the input file
 	if len(np.where(gwas[:,4]==0.0)[0])>0:
-		print "WARNING: P-value < 1e-323 is replaced with 1e-323"
+		logging.warning("WARNING: P-value < 1e-323 is replaced with 1e-323")
 		gwas[gwas[:,4]==0.0,4] = 1e-323
 	if len(np.where(gwas[:,4]==1)[0])>0:
-		print "WARNING: P-value 1 is replaced with 0.999999"
+		logging.info("WARNING: P-value 1 is replaced with 0.999999")
 		gwas[gwas[:,4]==1,4] = 0.999999
 	if args.twoside:
 		gwas[:,4] = -1.0*gwas[:,5]*st.norm.ppf(list(np.divide(gwas[:,4],2)))
@@ -371,12 +373,14 @@ def processGWAS(C, args):
 			elif l[0] == "process":
 				gwasfile = l[1]
 				GWASidx += 1
-				print "------------------------------------------------"
-				print "Process GWAS "+str(GWASidx)+": "+gwasfile
+				logging.info("------------------------------------------------")
+				logging.info("Process GWAS "+str(GWASidx)+": "+gwasfile)
 				if not (chrom and pos and a1 and a2 and p):
-					sys.exit("\nERROR: Not enought columns are provided in the config file. Chrom, pos, a1, a2 and p columns are required for all input GWAS files.")
+					logging.error("\nERROR: Not enought columns are provided in the config file. Chrom, pos, a1, a2 and p columns are required for all input GWAS files.")
+					sys.exit()
 				if not (N or weight):
-					sys.exit("\nERROR: Neither N nor weight are provided in the config file.")
+					logging.error("\nERROR: Neither N nor weight are provided in the config file.")
+					sys.exit()
 				processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, N, weight, rsID, delim, args)
 				chrom = None
 				pos = None
@@ -462,40 +466,51 @@ def getNeff(C):
 def main(args):
 	start_time = time.time()
 
+	### logging
+	logging.basicConfig(filename=args.out+".log", filemode='w', level=logging.DEBUG, format='%(message)s')
+	console = logging.StreamHandler()
+	console.setLevel(logging.DEBUG)
+	logging.getLogger('').addHandler(console)
+
 	global HEADMSS
 	HEADMSS += "Flags used:\n"
 	opts = vars(args)
 	options = ['--'+x.replace('_', '-')+' '+str(opts[x])+' \\' for x in opts.keys() if opts[x]]
 	HEADMSS += "\t"+"\n\t".join(options).replace('True','').replace('False','')
-	print HEADMSS
+	logging.info(HEADMSS)
 
 	### check arguments
 	if args.config is None:
 		parser.print_help()
-		sys.exit("\nERROR: Config file is required.")
+		logging.error("\nERROR: Config file is required.")
+		sys.exit()
 	if args.intercept is None:
 		parser.print_help()
-		sys.exit("\nERROR: Intercept file is required.")
+		logging.error("\nERROR: Intercept file is required.")
+		sys.exit()
 
 	### check input files
 	if not os.path.isfile(args.config):
-		sys.exit("\nERROR: Config file '"+args.config+"' does not exist.")
+		logging.error("\nERROR: Config file '"+args.config+"' does not exist.")
+		sys.exit()
 	if not os.path.isfile(args.intercept):
-		sys.exit("\nERROR: Intercept file '"+args.intercept+"' does not exist.")
+		logging.error("\nERROR: Intercept file '"+args.intercept+"' does not exist.")
+		sys.exit()
 
 	### count the number of GWAS to process and check if the file exist
 	global nGWAS
 	nGWAS = countGWASfiles(args.config)
-	print "\nDetected "+str(nGWAS)+" input GWAS files.\n"
+	logging.info("\nDetected "+str(nGWAS)+" input GWAS files.\n")
 
 	### get intercept matrix
 	C = getIntercept(args.intercept)
 	if len(C) != nGWAS-1:
-		sys.exit("\nERROR: The dimention of intercept matrix is wrong. The matrix should be lower off diagonal of pariwise intercept.")
+		logging.error("\nERROR: The dimention of intercept matrix is wrong. The matrix should be lower off diagonal of pariwise intercept.")
+		sys.exit()
 
 	### process files and store variables
 	processGWAS(C, args)
-	print "------------------------------------------------\n"
+	logging.info("------------------------------------------------\n")
 
 	### compute test statistics
 	results = computeZ(args.twoside)
@@ -505,18 +520,18 @@ def main(args):
 	### compute effective sample size
 	Neff_total = getNeff(C)
 	Nprop = Neff_total/sum(Nall)
-	print "***Sample size***"
-	print "Sum of sample size: "+str(sum(Nall))
-	print "Effective sample size: "+str(round(Neff_total,2))
-	print "Proportion of Neff to Nsum: "+str(round(Nprop,4))
+	logging.info("***Sample size***")
+	logging.info("Sum of sample size: "+str(sum(Nall)))
+	logging.info("Effective sample size: "+str(round(Neff_total,2)))
+	logging.info("Proportion of Neff to Nsum: "+str(round(Nprop,4)))
 
 	if args.neff_per_snp:
-		print "Computing per SNP Neff..."
+		logging.info("Computing per SNP Neff...")
 		Neff = getNeffPerSNP(C)
 		results = np.c_[results[:,0:8], [round(x,2) for x in Neff], results[:,8]]
 	else:
-		print "WARNING: Use ratio of total Neff to total Nsum to compute per SNP Neff"
-		print "         Use --neff-per-snp flag to compute accurate per SNP Neff."
+		logging.warning("WARNING: Use ratio of total Neff to total Nsum to compute per SNP Neff")
+		logging.warning("         Use --neff-per-snp flag to compute accurate per SNP Neff.")
 		results = np.c_[results[:,0:8], [round(x,2) for x in results[:,7].astype(float)*Nprop], results[:,8]]
 
 	with open(args.out+".txt", 'w') as o:
@@ -524,6 +539,6 @@ def main(args):
 	with open(args.out+".txt", 'a') as o:
 		np.savetxt(o, results, delimiter="\t", fmt="%s")
 	os.system("rm -r "+tmpdir)
-	print "\nProcess completed\nProgram run time: "+str(round(time.time()-start_time,2))+" sec"
+	logging.info("\nProcess completed\nProgram run time: "+str(round(time.time()-start_time,2))+" sec")
 
 if __name__ == "__main__": main(parser.parse_args())
