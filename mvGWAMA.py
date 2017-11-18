@@ -18,7 +18,7 @@ import math
 import time
 import logging
 from tempfile import mkdtemp
-from joblib import Parallel, delayed
+#from joblib import Parallel, delayed
 
 __version__ = '0.0.0'
 __date__ = '17/Nov/2017'
@@ -36,7 +36,7 @@ parser.add_argument('-i', '--intercept', default=None, type=str, help="(Required
 parser.add_argument('-o', '--out', default="mvGWAMA", type=str, help="Output file name. 'mvGWAMA' by default.")
 parser.add_argument('-ch', '--chrom', default=None, type=int, help="To run for a specific chromosome.")
 parser.add_argument('-p', '--parallel', default=None, type=int, help="To parallelize process, provide the number of cores/thread.")
-parser.add_argument('--twoside', default=False, action='store_true', help="Use this flag to convert P to Z by two sided.")
+parser.add_argument('--twoside', default=False, action='store_true', help="Use this flag to convert P to Z by two sided with alignment of direction of effects.")
 parser.add_argument('--neff-per-snp', default=False, action='store_true', help="Use this flag to compute effective samplesize per SNP (runtime will be longer). Otherwise, per SNP effect size is computed based on proportion of total Neff to total Nsum.")
 parser.add_argument('--no-weight', default=False, action='store_true', help="Use this flag to not weight by sample size.")
 
@@ -393,7 +393,6 @@ def processGWAS(C, args):
 				N = None
 				weight = None
 
-		# v = np.c_[v, [int(round(sum(np.square(x)))) for x in w[:,1:]]]
 		return
 
 ##### compute z from stored variables and combert to P #####
@@ -414,7 +413,7 @@ def computeZ(twoside):
 				out = np.c_[snps[:,[0,1]], [allele_idx[x] for x in snps[:,2]], [allele_idx[x] for x in snps[:,3]], info[:,1], z, p, [sum(x) for x in w], info[:,2]]
 			else:
 				out = np.r_[out, np.c_[snps[:,[0,1]], [allele_idx[x] for x in snps[:,2]], [allele_idx[x] for x in snps[:,3]], info[:,1], z, p, [sum(x) for x in w], info[:,2]]]
-	### return chr, pos, a1, a2, rsID, z, p, weight, direction
+	### output matrix chr, pos, a1, a2, rsID, z, p, Nsum, direction
 	return out
 
 ##### reduce N matrix
