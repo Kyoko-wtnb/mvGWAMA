@@ -288,10 +288,15 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 	rsID = None
 	tmp_a = None
 
+	### remove weight==0
+	if len(np.where(gwas[:,6]==0))>0:
+		logging.warning("WARNING: SNPs with weight 0 are removed.")
+		gwas = gwas[gwas[:,6]>0]
+
 	### remove duplicated SNPs
 	n = non_duplicated([str(l[0])+":"+str(l[1])+":"+"_".join(sorted([str(l[2]), str(l[3])])) for l in gwas[:,0:4]])
 	if len(n) < len(gwas):
-		logging.warning("Warning: "+str(len(gwas)-len(n))+" SNPs are removed due to duplicated uniqID.")
+		logging.warning("WARNING: "+str(len(gwas)-len(n))+" SNPs are removed due to duplicated uniqID.")
 		gwas = gwas.take(n,0)
 
 	### sort gwas by chr and pos
@@ -444,8 +449,8 @@ def getNeffPerSNP(C):
 							tmp.append(math.sqrt(l[i]*l[j])*C[i-1][j])
 						Nmat.append(tmp+[l[i]]+[0]*(nGWAS-1-i))
 				Nmat = np.array(Nmat).astype(float)
-				n = np.where(np.diag(Nmat)>0)
-				Neff.append(NeffMap(Nmat[n,n]))
+				n = np.where(np.diag(Nmat)>0)[0]
+				Neff.append(NeffMap(Nmat[n][:,n]))
 	return Neff
 
 def getNeff(C):
