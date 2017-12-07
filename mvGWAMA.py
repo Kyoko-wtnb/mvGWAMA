@@ -21,7 +21,7 @@ from tempfile import mkdtemp
 #from joblib import Parallel, delayed
 
 __version__ = '0.0.0'
-__date__ = '17/Nov/2017'
+__date__ = '07/Dec/2017'
 HEADMSS = "#####################################################\n"
 HEADMSS += "# Multivariate genome-wide association meta-analysis\n"
 HEADMSS += "# Version: {V}\n".format(V=__version__)
@@ -113,7 +113,7 @@ def match_rsID(ids):
 		return "NA"
 
 ### Update matrices
-def updateMatrix(gwas, chrom, GWASidx, C, nsnps, noweight):
+def updateMatrix(gwas, chrom, GWASidx, C, nsnps, noweight, twoside):
 	# global nSNPs
 	if GWASidx == 1 or not os.path.isfile(tmpdir+'/snps'+str(chrom)+'.dat'):
 		### initialize snps, info, w and v
@@ -166,6 +166,8 @@ def updateMatrix(gwas, chrom, GWASidx, C, nsnps, noweight):
 		m = ArrayIn(info[:,0], cur_uid)
 
 		logging.info("Aligning direction...")
+		if twoside:
+			gwas[n,4] = [l[2] if l[0]==l[1] else -1*l[2] for l in np.c_[snps[m,2], gwas[n,2], gwas[n,4]]]
 		gwas[n,5] = [l[2] if l[0]==l[1] else -1*l[2] for l in np.c_[snps[m,2], gwas[n,2], gwas[n,5]]]
 
 		logging.info("Updating matrices...")
@@ -253,7 +255,7 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 		effect = [1 if x>1 else -1 for x in gwas[:,header.index(oddsratio)]]
 	else:
 		logging.warning("WARNING: Neither signed effect size or odds ration was gievn, a1 allele is considered as risk increasing allele.")
-		effect = [1 for i in range(0, len(gwas))]
+		effect = [1]*len(gwas)
 
 	### check weight
 	# if weight is not given, assign N to all SNPs
@@ -317,6 +319,7 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 	else:
 		gwas[:,4] = -1.0*st.norm.ppf(list(gwas[:,4]))
 
+	print gwas[gwas[:,1]==161155392,]
 	chroms = unique(gwas[:,0])
 	## parallelize
 	if args.parallel is not None and args.parallel>0:
@@ -327,7 +330,7 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 			nSNPs[chroms[i]-1] = tmp_nSNPs[i]
 	else:
 		for c in chroms:
-			nSNPs[int(c)-1] = updateMatrix(gwas[gwas[:,0]==c], int(c), GWASidx, C, nSNPs[int(c)-1], args.no_weight)
+			nSNPs[int(c)-1] = updateMatrix(gwas[gwas[:,0]==c], int(c), GWASidx, C, nSNPs[int(c)-1], args.no_weight, args.twoside)
 
 
 ### process GWAS

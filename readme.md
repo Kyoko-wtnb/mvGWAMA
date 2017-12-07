@@ -133,6 +133,29 @@ Proportion of Neff to Nsum: 0.9842
 ```
 
 ## Parallelization
+### 1. Python multiprocessing
+
+### 2. Parallelize by bash script (recommended for HPC)
+When this scripts is used on the HPC cluster with access to multiple cores, you can parallelize process of each chromosome as the following.
+Note that, parallelizing 22 chromosome at once might cause memory error depends on how much memory access you have.
+If memory error occur, please split chromosomes into multiple loops.
+
+```
+for i in {1..22}
+do
+(
+	python mvGWAMA.py -c <config file> -i <intercept file> -ch $i -o temp$i.txt
+)&
+done
+wait
+
+for i in {2..22}
+do
+	awk 'NR>=2' temp$i.txt >>temp1.txt
+done
+
+mv temp1.txt <full output file>
+```
 
 ## Effective sample size
 
