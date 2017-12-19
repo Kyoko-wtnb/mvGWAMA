@@ -18,10 +18,9 @@ import math
 import time
 import logging
 from tempfile import mkdtemp
-#from joblib import Parallel, delayed
 
-__version__ = '0.0.0'
-__date__ = '07/Dec/2017'
+__version__ = '0.0.1'
+__date__ = '19/Dec/2017'
 HEADMSS = "#####################################################\n"
 HEADMSS += "# Multivariate genome-wide association meta-analysis\n"
 HEADMSS += "# Version: {V}\n".format(V=__version__)
@@ -35,7 +34,6 @@ parser.add_argument('-c', '--config', default=None, type=str, help="(Required) C
 parser.add_argument('-i', '--intercept', default=None, type=str, help="(Required) File name of the intercelpt matrix (lower triangle).")
 parser.add_argument('-o', '--out', default="mvGWAMA", type=str, help="Output file name. 'mvGWAMA' by default.")
 parser.add_argument('-ch', '--chrom', default=None, type=int, help="To run for a specific chromosome.")
-parser.add_argument('-p', '--parallel', default=None, type=int, help="To parallelize process, provide the number of cores/thread.")
 parser.add_argument('--twoside', default=False, action='store_true', help="Use this flag to convert P to Z by two sided with alignment of direction of effects.")
 parser.add_argument('--neff-per-snp', default=False, action='store_true', help="Use this flag to compute effective samplesize per SNP (runtime will be longer). Otherwise, per SNP effect size is computed based on proportion of total Neff to total Nsum.")
 parser.add_argument('--no-weight', default=False, action='store_true', help="Use this flag to not weight by sample size.")
@@ -321,15 +319,8 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 
 	print gwas[gwas[:,1]==161155392,]
 	chroms = unique(gwas[:,0])
-	## parallelize
-	if args.parallel is not None and args.parallel>0:
-		if args.parallel > len(chroms):
-			args.parallel = len(chroms)
-		# tmp_nSNPs = Parallel(n_jobs=args.parallel)(delayed(updateMatrix)(gwas[gwas[:,0]==c], c, GWASidx, C, nSNPs[c-1], args.no_weight) for c in chroms)
-		for i in range(0,len(chroms)):
-			nSNPs[chroms[i]-1] = tmp_nSNPs[i]
-	else:
-		for c in chroms:
+	### process per chromosome
+	for c in chroms:
 			nSNPs[int(c)-1] = updateMatrix(gwas[gwas[:,0]==c], int(c), GWASidx, C, nSNPs[int(c)-1], args.no_weight, args.twoside)
 
 

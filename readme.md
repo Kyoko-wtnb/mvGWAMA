@@ -2,8 +2,8 @@ mvGWAMA: Multivariate GWAS meta-analysis
 ========================================
 mvGWAMA is a python script to perform a GWAS meta-analysis when there are sample overlap.
 
-current version: v.0.0.0  
-last update: 17/Nov/2017
+current version: v.0.0.1
+last update: 18/Dec/2017
 
 ## Citation
 under preparation
@@ -39,9 +39,6 @@ optional arguments:
   -o OUT, --out OUT     Output file name. 'mvGWAMA' by default.
   -ch CHROM, --chrom CHROM
                         To run for a specific chromosome.
-  -p PARALLEL, --parallel PARALLEL
-                        To parallelize process, provide the number of
-                        cores/thread.
   --twoside             Use this flag to convert P to Z by two sided with
   						alignment of direction of effects.
   --neff-per-snp        Use this flag to compute effective samplesize per SNP
@@ -55,8 +52,6 @@ optional arguments:
 * ```-i / --intercept```: (Required) Path to a input intercept file (see below for format).
 * ```-o / --out```: Prefix of the output file. Default is mvGWAMA which creates two output files, mvGWAMA.txt and mvGWAMA.log.
 * ```-ch / --chrom```: To perform mvGWAMA for a specific chromosome, this flag can be used with integer variable between 1 and 23.
-* ```-p / --parallel```: To parallelize a process, a number of core can be provided with this flag.
-See section xxx for details of parallelization.
 * ```--twoside```: By default, direction of effect is not aligned and conversion between P-value and Z-score is one-sided.
 When this flag is provided, direction is aligned and conversion betweeen P-value and Z-score is two-sided.
 This flag is highhly recommended for a meta-analysis of the same or similar phenotypes.
@@ -133,9 +128,6 @@ Proportion of Neff to Nsum: 0.9842
 ```
 
 ## Parallelization
-### 1. Python multiprocessing
-
-### 2. Parallelize by bash script (recommended for HPC)
 When this scripts is used on the HPC cluster with access to multiple cores, you can parallelize process of each chromosome as the following.
 Note that, parallelizing 22 chromosome at once might cause memory error depends on how much memory access you have.
 If memory error occur, please split chromosomes into multiple loops.
