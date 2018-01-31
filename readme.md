@@ -2,11 +2,11 @@ mvGWAMA: Multivariate GWAS meta-analysis
 ========================================
 mvGWAMA is a python script to perform a GWAS meta-analysis when there are sample overlap.
 
-current version: v.0.0.1
-last update: 18/Dec/2017
+current version: v.0.0.1  
+last update: 2018-01-31
 
 ## Citation
-under preparation
+In preparation
 
 ## Requirements
 * ```Python 3> version >= 2.7```
@@ -18,7 +18,7 @@ under preparation
 ## Getting started
 You can either clone this repository or simply download python script.
 ```
-git clone
+git clone https://github.com/Kyoko-wtnb/mvGWAMA.git
 ```
 
 The script can be executed by the following command.
@@ -53,8 +53,8 @@ optional arguments:
 * ```-o / --out```: Prefix of the output file. Default is mvGWAMA which creates two output files, mvGWAMA.txt and mvGWAMA.log.
 * ```-ch / --chrom```: To perform mvGWAMA for a specific chromosome, this flag can be used with integer variable between 1 and 23.
 * ```--twoside```: By default, direction of effect is not aligned and conversion between P-value and Z-score is one-sided.
-When this flag is provided, direction is aligned and conversion betweeen P-value and Z-score is two-sided.
-This flag is highhly recommended for a meta-analysis of the same or similar phenotypes.
+When this flag is provided, direction is aligned and conversion between P-value and Z-score is two-sided.
+This flag is highly recommended for a meta-analysis of the same or similar phenotypes.
 * ```--neff-per-snp```: When this flag is provided, effective sample size is computed per SNP.
 Otherwise, per SNP effective sample size is based on the ration of total effective sample size to total sum of sample size.
 The total run time can be longer (around 20%) when this flag is used. See section xxx for details.
@@ -92,14 +92,14 @@ process GWAS2.txt
 ```
 
 ### 2. intercept matrix
-The intercept is defined as Ns*rp/Na*Nb where Na and Nb are the sample size of GWAS a and b, Ns is the actual sample overlap, rp is the phenotypic correlation of phenotype a and b. However, sample overlap and phenotypic correlation are often not available. In that case, we can estimate intercept by using LD score regression [ref] (the cross-trait LD score regression intercept).
-The input file should contain lower triangle of pair-wise intercept matrix excluding diagonal. And the rows and columns should be ordered same as the order of GWAS file in the config file. For example, if you want to analyse GWAS a, b and c, the intercept file should look like
+The intercept (*CTI*) is defined as *N<sub>s</sub>* x *r<sub>p</sub>* / *N<sub>a</sub>N<sub>b</sub>* where *N<sub>a</sub>* and *N<sub>b</sub>* are the sample size of GWAS *a* and *b*, *N<sub>s</sub>* is the actual sample overlap, *r<sub>p</sub>* is the phenotypic correlation of phenotype *a* and *b*. However, sample overlap and phenotypic correlation are often not available. In that case, we can estimate intercept by using LD score regression [PMID:25642630] (the cross-trait LD score regression intercept).
+The input file should contain lower triangle of pair-wise intercept matrix excluding diagonal. And the rows and columns should be ordered same as the order of GWAS file in the config file. For example, if you want to analyse GWAS *a*, *b* and *c*, the intercept file should look like
 
 ```
-Cba
-Cca Ccb
+CTI_ba
+CTI_ca CTI_cb
 ```
-where Cij is the intercept between GWAS i and j, without header.
+where *CTI<sub>ij</sub>* is the intercept between GWAS *i* and *j*, without header.
 
 ## Output file format
 ### 1. test statistics
@@ -149,21 +149,52 @@ done
 mv temp1.txt <full output file>
 ```
 
-## Effective sample size
+## Effective sample size per SNP
+The effective sample size (*N<sub>eff</sub>*) is computed for each SNP *k* from the matrix *M*, containing the sample size *N<sub>i</sub>* of each cohort *i* on the diagonal and the estimated number shared data points *N<sub>sij</sub>* x *rho<sub>ij</sub>* = *CTI<sub>ij</sub>* x sqrt(*N<sub>i</sub>N<sub>j</sub>*) for each pair of cohorts *i* and *j* as the off-diagonal values.
+*N<sub>eff</sub>* is computed recursively as follows. Starting with the first cohort in *M*, *N<sub>eff</sub>* is first increased by *M<sub>1,1</sub>*, corresponding to the sample size of that cohort.
+The proportion of samples shared between cohort 1 and each other cohort *j* is them computed as *p<sub>1,j</sub>* = *M<sub>1,j</sub>* / *M<sub>j,j</sub>*, and *M* is then adjusted to remove this overlap, multiplying all values in each column *j* by 1-*p<sub>1,j</sub>*.
+This amounts to reducing the sample size of each other cohort *j* by the number of samples it shares with cohort 1, and reducing the shared samples between cohort *j* and subsequent cohorts by the same proportion.
+After this, the first row and column of *M* are discarded, and the same process is applied to the new *M* matrix. This is repeated until *M* is empty.
+
+Note that computing per SNP effect size takes longer than without --neff-per-snp flag.
+
+```
+function compute_neff(M):
+	n_eff = M[1,1]
+	if (dimension(M) > 1) n_eff += compute_neff(reduce(M))
+	return n_eff
+
+function reduce(M):
+	for (j := 2 to dimension(M))
+		p = M[1,j]/M[j,j]
+		for (i := 2 to dimension(M))
+			M[i,j] = (1-p)*M[i,j]
+	return M[-1,-1]
+```
 
 ## Note and tips
-1. rsID
-2. Alignment of direction
-3. P-value
-4. Duplicated SNPs
-5. Matching SNPs between GWAS
-6. Intercept
-7. Effective sample size
+### 1. rsID
+When rsID column is provided for any of input GWAS files, rsID is extracted from those files.
+For SNPs whoes rsID is not available, the rsID column is substituted with unique ID of the SNP which consists of chr:position:alleleA_alleleB where alleles are alphabetically ordered.
+For SNPs that have rsID in more than one input file but rsID does not match across files, the rsID column is substituted with unique ID.
+Note that this script does not check the duplication of rsID.
+
+### 2. Alignment of direction
+Effect allele is defined as the one provided in the first GWAS file.
+Therefore, the alleles of the 2nd or later GWAS files are aligned to the ones in the first file.
+
+### 3. Duplicated SNPs
+Prior to the analysis, duplicated SNPs based on the unique ID (chr:pos:alleleA_alleleB where alleles are alphabetically ordered) are removed.
+
+### 4. Matching SNPs between GWAS
+SNPs are matched based on unique ID (chr:pos:alleleA_alleleB where alleles are alphabetically ordered) between input GWAS files.
+Therefore, please make sure that all of input GWAS files are based on the same genome reference (e.g. hg19).
 
 ## Updates
+2018-01-31: v0.0.1 (First release)
 
 ## Licence
-This project is licensed under GNU GPL v3.
+This script is licensed under GNU GPL v3.
 
 ## Authors
 Kyoko Watanabe (VU University Amsterdam)  

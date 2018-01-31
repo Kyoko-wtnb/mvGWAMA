@@ -20,7 +20,7 @@ import logging
 from tempfile import mkdtemp
 
 __version__ = '0.0.1'
-__date__ = '19/Dec/2017'
+__date__ = '31/Jan/2018'
 HEADMSS = "#####################################################\n"
 HEADMSS += "# Multivariate genome-wide association meta-analysis\n"
 HEADMSS += "# Version: {V}\n".format(V=__version__)
@@ -117,7 +117,7 @@ def updateMatrix(gwas, chrom, GWASidx, C, nsnps, noweight, twoside):
 		### initialize snps, info, w and v
 		# snps: 0:chr, 1:pos, 2:a1, 3:a2 (int)
 		# info: 0:uniqID, 1:rsID, 2:direction (str)
-		# w : store weight per GWAS (int)
+		# w : store sample size (N) per GWAS (int)
 		# v: 0:wz, 1:w2, 2:wwc
 
 		logging.info("Initializing snps matrix...")
