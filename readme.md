@@ -2,14 +2,15 @@ mvGWAMA: Multivariate GWAS meta-analysis
 ========================================
 mvGWAMA is a python script to perform a GWAS meta-analysis when there are sample overlap.
 
-current version: v.0.0.1  
-last update: 2018-01-31
+current version: v.0.0.2
+last update: 2019-12-01
 
 ## Citation
-In preparation
+Iris E. Jansen et al. Genome-wide meta-analysis identified new loci and functional pathways influencing Alzheimer's disease risk. <em>Nat. Genet.</em> **51**, 404-413 (2019)  
+[https://www.nature.com/articles/s41588-018-0311-9](https://www.nature.com/articles/s41588-018-0311-9)
 
 ## Requirements
-* ```Python 3> version >= 2.7```
+* ```Python 3 > version >= 2.7```
 * ```pandas version >= 0.19.0```
 * ```numpy version >= 1.11.2```
 * ```argparse version >= 1.2.1```

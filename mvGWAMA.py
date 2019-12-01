@@ -19,8 +19,8 @@ import time
 import logging
 from tempfile import mkdtemp
 
-__version__ = '0.0.1'
-__date__ = '31/Jan/2018'
+__version__ = '0.0.2'
+__date__ = '01/Dec/2019'
 HEADMSS = "#####################################################\n"
 HEADMSS += "# Multivariate genome-wide association meta-analysis\n"
 HEADMSS += "# Version: {V}\n".format(V=__version__)
@@ -223,7 +223,7 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 		cols.append(oddsratio)
 	if weight is not None:
 		cols.append(weight)
-	gwas = pd.read_table(gwasfile, sep=delim, header=0, usecols=cols)
+	gwas = pd.read_csv(gwasfile, sep=delim, header=0, usecols=cols)
 	header = list(gwas.columns.values)
 	gwas = np.array(gwas)
 	if type(gwas[0,header.index(chrom)]) is str:
@@ -317,7 +317,6 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 	else:
 		gwas[:,4] = -1.0*st.norm.ppf(list(gwas[:,4]))
 
-	print gwas[gwas[:,1]==161155392,]
 	chroms = unique(gwas[:,0])
 	### process per chromosome
 	for c in chroms:
