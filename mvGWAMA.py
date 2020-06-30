@@ -19,8 +19,8 @@ import time
 import logging
 from tempfile import mkdtemp
 
-__version__ = '0.0.2'
-__date__ = '01/Dec/2019'
+__version__ = '0.0.3'
+__date__ = '30/Jun/2020'
 HEADMSS = "#####################################################\n"
 HEADMSS += "# Multivariate genome-wide association meta-analysis\n"
 HEADMSS += "# Version: {V}\n".format(V=__version__)
@@ -37,6 +37,7 @@ parser.add_argument('-ch', '--chrom', default=None, type=int, help="To run for a
 parser.add_argument('--twoside', default=False, action='store_true', help="Use this flag to convert P to Z by two sided with alignment of direction of effects.")
 parser.add_argument('--neff-per-snp', default=False, action='store_true', help="Use this flag to compute effective samplesize per SNP (runtime will be longer). Otherwise, per SNP effect size is computed based on proportion of total Neff to total Nsum.")
 parser.add_argument('--no-weight', default=False, action='store_true', help="Use this flag to not weight by sample size.")
+parser.add_argument('--mpmath', default=False, action='store_true', help='Use mpmath library as backend')
 
 ### global variable
 tmpdir = os.path.join(mkdtemp()) #path to temp for memmap files
@@ -45,6 +46,9 @@ allele_map = {'A':0, 'C':1, 'G':2, 'T':3}
 nGWAS = 0
 nSNPs = [0]*23
 Nall = []
+cdf = None
+pdf = None
+ppf = None
 
 ##### Return index of a1 which exist in a2 #####
 def ArrayIn(a1, a2):
@@ -215,15 +219,20 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 	global Nall
 
 	cols = [chrom, pos, a1, a2, p]
+	col_dtype = {chrom: str, pos: int, a1:str, a2:str, p:str}
 	if rsID is not None:
 		cols.append(rsID)
+		col_dtype[rsID] = str
 	if effect is not None:
 		cols.append(effect)
+		col_dtype[effect] = float
 	if oddsratio is not None:
 		cols.append(oddsratio)
+		col_dtype[oddsratio] = float
 	if weight is not None:
 		cols.append(weight)
-	gwas = pd.read_csv(gwasfile, sep=delim, header=0, usecols=cols)
+		col_dtype[weight] = float
+	gwas = pd.read_csv(gwasfile, sep=delim, header=0, usecols=cols, dtype=col_dtype)
 	header = list(gwas.columns.values)
 	gwas = np.array(gwas)
 	if type(gwas[0,header.index(chrom)]) is str:
@@ -305,17 +314,19 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 
 	### compute Z
 	logging.info("Converting P to Z score...")
-	# replace P == 0 to the minimum P-value in the input file
-	if len(np.where(gwas[:,4]==0.0)[0])>0:
-		logging.warning("WARNING: P-value < 1e-323 is replaced with 1e-323")
-		gwas[gwas[:,4]==0.0,4] = 1e-323
-	if len(np.where(gwas[:,4]==1)[0])>0:
+	if len(np.where(gwas[:,4].astype(float)==1)[0])>0:
 		logging.info("WARNING: P-value 1 is replaced with 0.999999")
-		gwas[gwas[:,4]==1,4] = 0.999999
+		gwas[gwas[:,4].astype(float)==1,4] = '0.999999'
 	if args.twoside:
-		gwas[:,4] = -1.0*gwas[:,5]*st.norm.ppf(list(np.divide(gwas[:,4],2)))
+		if args.mpmath:
+			gwas[:,4] = -1.0*gwas[:,5]*map(lambda x: float(ppf(mpf(x)/2)), gwas[:,4])
+		else:
+			gwas[:,4] = -1.0*gwas[:,5]*st.norm.ppf(list(np.divide(gwas[:,4].astype(float),2)))
 	else:
-		gwas[:,4] = -1.0*st.norm.ppf(list(gwas[:,4]))
+		if args.mpmath:
+			gwas[:,4] = -1.0*map(lambda x: float(ppf(mpf(x))),gwas[:,4])
+		else:
+			gwas[:,4] = -1.0*st.norm.ppf(list(gwas[:,4].astype()))
 
 	chroms = unique(gwas[:,0])
 	### process per chromosome
@@ -394,7 +405,7 @@ def processGWAS(C, args):
 		return
 
 ##### compute z from stored variables and combert to P #####
-def computeZ(twoside):
+def computeZ(args):
 	out = []
 	for chrom in range(1,24):
 		if os.path.isfile(tmpdir+'/snps'+str(chrom)+'.dat'):
@@ -403,10 +414,16 @@ def computeZ(twoside):
 			w = np.memmap(tmpdir+'/w'+str(chrom)+'.dat', dtype='int64', mode='r+', shape=(nSNPs[chrom-1], nGWAS), order='C')
 			v = np.memmap(tmpdir+'/v'+str(chrom)+'.dat', dtype='float128', mode='r+', shape=(nSNPs[chrom-1], 3), order='C')
 			z = np.divide(v[:,0].astype(float), np.sqrt(np.add(v[:,1].astype(float), 2*v[:,2].astype(float))))
-			if twoside:
-				p = st.norm.cdf(list(-1.0*np.absolute(z)))*2
+			if args.twoside:
+				if args.mpmath:
+					p = map(lambda x: str(cdf(x)*2), list(-1.0*np.absolute(z)))
+				else:
+					p = st.norm.cdf(list(-1.0*np.absolute(z)))*2
 			else:
-				p = st.norm.cdf(list(-1.0*z))
+				if args.mpmath:
+					p = map(lambda x: str(cdf(x)), list(-1.0*z))
+				else:
+					p = st.norm.cdf(list(-1.0*z))
 			if len(out)==0:
 				out = np.c_[snps[:,[0,1]], [allele_idx[x] for x in snps[:,2]], [allele_idx[x] for x in snps[:,3]], info[:,1], z, p, [sum(x) for x in w], info[:,2]]
 			else:
@@ -463,6 +480,12 @@ def getNeff(C):
 def main(args):
 	start_time = time.time()
 
+	### load extra library for mpmath
+	if args.mpmath:
+		global cdf, pdf, ppf, choose_backend, mpf
+		from trueskill.backends import choose_backend
+		from mpmath import mpf
+		cdf, pdf, ppf = choose_backend('mpmath')
 	### logging
 	logging.basicConfig(filename=args.out+".log", filemode='w', level=logging.DEBUG, format='%(message)s')
 	console = logging.StreamHandler()
@@ -510,7 +533,7 @@ def main(args):
 	logging.info("------------------------------------------------\n")
 
 	### compute test statistics
-	results = computeZ(args.twoside)
+	results = computeZ(args)
 	## replace rsID=NA to uniqID
 	results[results[:,4]=="NA",4] = [[str(l[0])+":"+str(l[1])+":"+"_".join(sorted([l[2], l[3]])) for l in results[results[:,4]=="NA",0:4]]]
 
