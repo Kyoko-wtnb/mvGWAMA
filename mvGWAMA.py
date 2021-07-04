@@ -30,14 +30,29 @@ HEADMSS += "# GNU General Public Licence v3\n"
 HEADMSS += "#####################################################\n"
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-c', '--config', default=None, type=str, help="(Required) Config file of summary statistics.")
-parser.add_argument('-i', '--intercept', default=None, type=str, help="(Required) File name of the intercelpt matrix (lower triangle).")
-parser.add_argument('-o', '--out', default="mvGWAMA", type=str, help="Output file name. 'mvGWAMA' by default.")
-parser.add_argument('-ch', '--chrom', default=None, type=int, help="To run for a specific chromosome.")
-parser.add_argument('--twoside', default=False, action='store_true', help="Use this flag to convert P to Z by two sided with alignment of direction of effects.")
-parser.add_argument('--neff-per-snp', default=False, action='store_true', help="Use this flag to compute effective samplesize per SNP (runtime will be longer). Otherwise, per SNP effect size is computed based on proportion of total Neff to total Nsum.")
-parser.add_argument('--no-weight', default=False, action='store_true', help="Use this flag to not weight by sample size.")
-parser.add_argument('--mpmath', default=False, action='store_true', help='Use mpmath library as backend')
+parser.add_argument('-c', '--config', default=None, type=str, required=True,
+	help="(Required) Config file of summary statistics.")
+parser.add_argument('-i', '--intercept', default=None, type=str, required=True,
+	help="(Required) File name of the intercelpt matrix (lower triangle).")
+parser.add_argument('-o', '--out', default="mvGWAMA", type=str,
+	help="Output file name. 'mvGWAMA' by default.")
+parser.add_argument('-ch', '--chrom', default=None, type=int,
+	help="To run for a specific chromosome.")
+parser.add_argument('--twoside', default=True, action='store_true',
+	help="Use this flag to convert P to Z by two sided with alignment of direction of effects.")
+parser.add_argument('--oneside', default=False, action='store_true',
+	help="Use this flag to convert P to Z by one sided with alignment of direction of effects.")
+parser.add_argument('--max-indel-len', default=10, type=int,
+	help="Maximum length of the indel characters (single allele).")
+parser.add_argument('--neff-per-snp', default=False, action='store_true',
+	help="""
+	Use this flag to compute effective samplesize per SNP (runtime will be longer).
+	Otherwise, per SNP effect size is computed based on proportion of total Neff to total Nsum.
+	""")
+parser.add_argument('--no-weight', default=False, action='store_true',
+	help="Use this flag to not weight by sample size.")
+parser.add_argument('--mpmath', default=False, action='store_true',
+	help='Use mpmath library as backend')
 
 ### global variable
 tmpdir = os.path.join(mkdtemp()) #path to temp for memmap files
@@ -115,7 +130,8 @@ def match_rsID(ids):
 		return "NA"
 
 ### Update matrices
-def updateMatrix(gwas, chrom, GWASidx, C, nsnps, noweight, twoside):
+def updateMatrix(gwas, chrom, GWASidx, C, nsnps, noweight, twoside, max_indel_len):
+	print(gwas[0:5])
 	# global nSNPs
 	if GWASidx == 1 or not os.path.isfile(tmpdir+'/snps'+str(chrom)+'.dat'):
 		### initialize snps, info, w and v
@@ -128,7 +144,7 @@ def updateMatrix(gwas, chrom, GWASidx, C, nsnps, noweight, twoside):
 		snps = np.memmap(tmpdir+'/snps'+str(chrom)+'.dat', dtype='int64', mode='w+', shape=(len(gwas), 4))
 		snps[:] = gwas[:,0:4]
 		snps.flush()
-		info = np.memmap(tmpdir+'/info'+str(chrom)+'.dat', dtype='S'+str(nGWAS+10), mode='w+', shape=(len(gwas), 3))
+		info = np.memmap(tmpdir+'/info'+str(chrom)+'.dat', dtype='S{}'.format(14+(max_indel_len*2-1)), mode='w+', shape=(len(gwas), 3))
 		info[:] = np.c_[[str(l[1])+":"+"_".join(sorted([str(l[2]), str(l[3])])) for l in gwas], gwas[:,7], ["?"*(GWASidx-1)+'+' if x>0 else "?"*(GWASidx-1)+'-' for x in gwas[:,5].astype(int)]]
 		info.flush()
 
@@ -152,7 +168,7 @@ def updateMatrix(gwas, chrom, GWASidx, C, nsnps, noweight, twoside):
 		del snps, info, w, v
 	else:
 		logging.info("Checking additional SNPs...")
-		info = np.memmap(tmpdir+'/info'+str(chrom)+'.dat', dtype='S'+str(nGWAS+10), mode='r', shape=(nsnps, 3), order='C')
+		info = np.memmap(tmpdir+'/info'+str(chrom)+'.dat', dtype='S{}'.format(14+(max_indel_len*2-1)), mode='r', shape=(nsnps, 3), order='C')
 		cur_uid = [str(l[1])+":"+"_".join(sorted([str(l[2]), str(l[3])])) for l in gwas]
 		new_idx = ArrayNotIn(cur_uid, info[:,0])
 		logging.info("Detected "+str(len(new_idx))+" additional SNPs")
@@ -160,7 +176,7 @@ def updateMatrix(gwas, chrom, GWASidx, C, nsnps, noweight, twoside):
 
 		logging.info("Loading matrices...")
 		snps = np.memmap(tmpdir+'/snps'+str(chrom)+'.dat', dtype='int64', mode='r+', shape=(nsnps+len(new_idx), 4), order='C')
-		info = np.memmap(tmpdir+'/info'+str(chrom)+'.dat', dtype='S'+str(nGWAS+10), mode='r+', shape=(nsnps+len(new_idx), 3), order='C')
+		info = np.memmap(tmpdir+'/info'+str(chrom)+'.dat', dtype='S{}'.format(14+(max_indel_len*2-1)), mode='r+', shape=(nsnps+len(new_idx), 3), order='C')
 		w = np.memmap(tmpdir+'/w'+str(chrom)+'.dat', dtype='int64', mode='r+', shape=(nsnps+len(new_idx), nGWAS), order='C')
 		v = np.memmap(tmpdir+'/v'+str(chrom)+'.dat', dtype='float128', mode='r+', shape=(nsnps+len(new_idx), 3), order='C')
 
@@ -219,7 +235,7 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 	global Nall
 
 	cols = [chrom, pos, a1, a2, p]
-	col_dtype = {chrom: str, pos: int, a1:str, a2:str, p:str}
+	col_dtype = {chrom:str, pos: int, a1:str, a2:str, p:str}
 	if rsID is not None:
 		cols.append(rsID)
 		col_dtype[rsID] = str
@@ -233,6 +249,10 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 		cols.append(weight)
 		col_dtype[weight] = float
 	gwas = pd.read_csv(gwasfile, sep=delim, header=0, usecols=cols, dtype=col_dtype)
+	### filter entries with P value NA
+	gwas = gwas[~gwas[p].astype(float).isnull()].reset_index(drop=False)
+	### filter Indesl with longer than user threshold
+	gwas = gwas[gwas[[a1,a2]].apply(lambda x: len('{}{}'.format(x[a1], x[a2])), axis=1)<=args.max_indel_len*2-1]
 	header = list(gwas.columns.values)
 	gwas = np.array(gwas)
 	if type(gwas[0,header.index(chrom)]) is str:
@@ -326,12 +346,12 @@ def processFile(gwasfile, C, GWASidx, chrom, pos, a1, a2, p, effect, oddsratio, 
 		if args.mpmath:
 			gwas[:,4] = -1.0*map(lambda x: float(ppf(mpf(x))),gwas[:,4])
 		else:
-			gwas[:,4] = -1.0*st.norm.ppf(list(gwas[:,4].astype()))
+			gwas[:,4] = -1.0*st.norm.ppf(list(gwas[:,4].astype(float)))
 
 	chroms = unique(gwas[:,0])
 	### process per chromosome
 	for c in chroms:
-			nSNPs[int(c)-1] = updateMatrix(gwas[gwas[:,0]==c], int(c), GWASidx, C, nSNPs[int(c)-1], args.no_weight, args.twoside)
+			nSNPs[int(c)-1] = updateMatrix(gwas[gwas[:,0]==c], int(c), GWASidx, C, nSNPs[int(c)-1], args.no_weight, args.twoside, args.max_indel_len)
 
 
 ### process GWAS
@@ -410,7 +430,7 @@ def computeZ(args):
 	for chrom in range(1,24):
 		if os.path.isfile(tmpdir+'/snps'+str(chrom)+'.dat'):
 			snps = np.memmap(tmpdir+'/snps'+str(chrom)+'.dat', dtype='int64', mode='r+', shape=(nSNPs[chrom-1], 4), order='C')
-			info = np.memmap(tmpdir+'/info'+str(chrom)+'.dat', dtype='S'+str(nGWAS+10), mode='r+', shape=(nSNPs[chrom-1], 3), order='C')
+			info = np.memmap(tmpdir+'/info'+str(chrom)+'.dat', dtype='S{}'.format(14+(args.max_indel_len*2-1)), mode='r+', shape=(nSNPs[chrom-1], 3), order='C')
 			w = np.memmap(tmpdir+'/w'+str(chrom)+'.dat', dtype='int64', mode='r+', shape=(nSNPs[chrom-1], nGWAS), order='C')
 			v = np.memmap(tmpdir+'/v'+str(chrom)+'.dat', dtype='float128', mode='r+', shape=(nSNPs[chrom-1], 3), order='C')
 			z = np.divide(v[:,0].astype(float), np.sqrt(np.add(v[:,1].astype(float), 2*v[:,2].astype(float))))
@@ -508,6 +528,8 @@ def main(args):
 		parser.print_help()
 		logging.error("\nERROR: Intercept file is required.")
 		sys.exit()
+	if args.oneside:
+		args.twoside = False
 
 	### check input files
 	if not os.path.isfile(args.config):
