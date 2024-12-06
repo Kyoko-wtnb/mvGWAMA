@@ -40,8 +40,7 @@ optional arguments:
   -o OUT, --out OUT     Output file name. 'mvGWAMA' by default.
   -ch CHROM, --chrom CHROM
                         To run for a specific chromosome.
-  --twoside             Use this flag to convert P to Z by two sided with
-  						alignment of direction of effects.
+  --oneside             Use this flag to prevent two-sided conversion of P to Z with alignment of direction of effects.
   --neff-per-snp        Use this flag to compute effective samplesize per SNP
                         (runtime will be longer). Otherwise, per SNP effect
                         size is computed based on proportion of total Neff to
@@ -53,9 +52,7 @@ optional arguments:
 * ```-i / --intercept```: (Required) Path to a input intercept file (see below for format).
 * ```-o / --out```: Prefix of the output file. Default is mvGWAMA which creates two output files, mvGWAMA.txt and mvGWAMA.log.
 * ```-ch / --chrom```: To perform mvGWAMA for a specific chromosome, this flag can be used with integer variable between 1 and 23.
-* ```--twoside```: By default, direction of effect is not aligned and conversion between P-value and Z-score is one-sided.
-When this flag is provided, direction is aligned and conversion between P-value and Z-score is two-sided.
-This flag is highly recommended for a meta-analysis of the same or similar phenotypes.
+* ```--oneside```: By default, direction of effect is aligned and conversion between P-value and Z-score is two-sided. Set this flag to disable alignment and use one-sided conversion between P-value and Z-score instead.
 * ```--neff-per-snp```: When this flag is provided, effective sample size is computed per SNP.
 Otherwise, per SNP effective sample size is based on the ration of total effective sample size to total sum of sample size.
 The total run time can be longer (around 20%) when this flag is used. See section xxx for details.
