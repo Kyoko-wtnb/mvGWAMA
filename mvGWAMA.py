@@ -34,7 +34,8 @@ parser.add_argument('-c', '--config', default=None, type=str, help="(Required) C
 parser.add_argument('-i', '--intercept', default=None, type=str, help="(Required) File name of the intercelpt matrix (lower triangle).")
 parser.add_argument('-o', '--out', default="mvGWAMA", type=str, help="Output file name. 'mvGWAMA' by default.")
 parser.add_argument('-ch', '--chrom', default=None, type=int, help="To run for a specific chromosome.")
-parser.add_argument('--twoside', default=True, action='store_true', help="Use this flag to convert P to Z by two sided with alignment of direction of effects.")
+parser.add_argument('--oneside', default=False, action='store_true', help="Use this flag to prevent two-sided conversion of P to Z with alignment of direction of effects.")
+parser.add_argument('--twoside', default=True, action='store_true', help="Deprecated. Use --oneside instead.")
 parser.add_argument('--neff-per-snp', default=False, action='store_true', help="Use this flag to compute effective samplesize per SNP (runtime will be longer). Otherwise, per SNP effect size is computed based on proportion of total Neff to total Nsum.")
 parser.add_argument('--no-weight', default=False, action='store_true', help="Use this flag to not weight by sample size.")
 
@@ -476,6 +477,10 @@ def main(args):
 	HEADMSS += "\t"+"\n\t".join(options).replace('True','').replace('False','')
 	logging.info(HEADMSS)
 
+	### flip twoside option if needed
+	if args.oneside:
+		args.twoside = False
+		
 	### check arguments
 	if args.config is None:
 		parser.print_help()
